@@ -9,6 +9,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -305,7 +306,9 @@ public class RecipeImporter {
         }
 
         // Descente récursive dans toutes les clés
-        for (String key : obj.keySet()) {
+        Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
             try {
                 Object val = obj.get(key);
                 if (val instanceof JSONObject) {
