@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v16
+import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v17
 
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
@@ -408,18 +408,25 @@ function AppHeader({ tab }) {
   const t = TABS.find(x => x.id===tab);
   return (
     <header style={{
-      background:C.card, borderBottom:`1px solid ${C.border}`,
-      padding:'10px 16px', display:'flex', justifyContent:'space-between', alignItems:'center',
+      background: 'linear-gradient(135deg, #0F2137 0%, #1A3A6C 100%)',
+      borderBottom: '1px solid #1E4070',
+      padding: '16px 18px',
+      display:'flex', justifyContent:'space-between', alignItems:'center',
       position:'sticky', top:0, zIndex:100, flexShrink:0,
     }}>
       <div>
-        <div style={{ fontWeight:800, fontSize:16, color:C.text, letterSpacing:'-0.02em' }}>🍽 Meal Plan</div>
-        <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>{t?.icon} {t?.label}</div>
+        <div style={{ fontWeight:800, fontSize:20, color:'#FFFFFF', letterSpacing:'-0.02em', lineHeight:1.1 }}>
+          🍽 Meal Plan
+        </div>
+        <div style={{ fontSize:13, color:'#7EC8FF', marginTop:3, fontWeight:500 }}>
+          {t?.icon} {t?.label}
+        </div>
       </div>
       <div style={{
-        background:C.accentBg, color:C.accent,
-        fontSize:11, fontWeight:700, padding:'4px 11px', borderRadius:20,
-        border:`1px solid ${C.accent}33`, letterSpacing:'0.02em',
+        background: 'rgba(126,200,255,0.15)',
+        color: '#7EC8FF',
+        fontSize:12, fontWeight:700, padding:'5px 13px', borderRadius:20,
+        border:'1px solid rgba(126,200,255,0.4)', letterSpacing:'0.02em',
       }}>v{VERSION}</div>
     </header>
   );
@@ -431,33 +438,51 @@ function BottomNav({ tab, setTab }) {
   return (
     <nav style={{
       position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)',
-      width:'100%', maxWidth:480, background:C.card, borderTop:`1px solid ${C.border}`,
-      display:'flex', zIndex:100,
+      width:'100%', maxWidth:480,
+      background: 'linear-gradient(180deg, #152E52 0%, #0F2137 100%)',
+      borderTop: '1px solid #1E4070',
+      display:'flex', zIndex:100, height:70,
     }}>
-      {TABS.map(item => (
-        <button key={item.id} onClick={() => setTab(item.id)} style={{
-          flex:1, background:'none', border:'none', padding:'8px 0',
-          display:'flex', flexDirection:'column', alignItems:'center', gap:2,
-          color: tab===item.id ? C.accent : C.muted,
-          transition:'color 0.15s', cursor:'pointer',
-        }}>
-          <div style={{ position:'relative' }}>
-            <span style={{ fontSize:19 }}>{item.icon}</span>
-            {item.id === 'shopping' && shopCount > 0 && (
-              <span style={{
-                position:'absolute', top:-4, right:-7,
-                background:C.accent, color:'#fff', borderRadius:'50%',
-                width:15, height:15, fontSize:9, fontWeight:700,
-                display:'flex', alignItems:'center', justifyContent:'center',
-                lineHeight:1,
-              }}>{shopCount > 99 ? '99' : shopCount}</span>
+      {TABS.map(item => {
+        const active = tab === item.id;
+        return (
+          <button key={item.id} onClick={() => setTab(item.id)} style={{
+            flex:1, background:'none', border:'none', padding:'0',
+            display:'flex', flexDirection:'column', alignItems:'center',
+            justifyContent:'center', gap:3,
+            cursor:'pointer', position:'relative', transition:'all 0.15s',
+          }}>
+            {/* Indicateur actif en haut */}
+            {active && (
+              <div style={{
+                position:'absolute', top:0, left:'22%', right:'22%',
+                height:2, background:'#7EC8FF',
+                borderRadius:'0 0 3px 3px',
+              }} />
             )}
-          </div>
-          <span style={{ fontSize:9, fontWeight:tab===item.id?700:400, letterSpacing:'0.04em' }}>
-            {item.label.toUpperCase()}
-          </span>
-        </button>
-      ))}
+            {/* Icône + badge */}
+            <div style={{ position:'relative' }}>
+              <span style={{ fontSize:24 }}>{item.icon}</span>
+              {item.id === 'shopping' && shopCount > 0 && (
+                <span style={{
+                  position:'absolute', top:-4, right:-7,
+                  background:'#7EC8FF', color:'#0F2137',
+                  borderRadius:'50%', width:16, height:16,
+                  fontSize:9, fontWeight:800,
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                }}>{shopCount > 99 ? '99' : shopCount}</span>
+              )}
+            </div>
+            <span style={{
+              fontSize:12, fontWeight: active ? 700 : 400,
+              color: active ? '#7EC8FF' : '#3A6080',
+              letterSpacing:'0.04em',
+            }}>
+              {item.label.toUpperCase()}
+            </span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
@@ -2704,7 +2729,7 @@ function AppShell() {
   return (
     <div style={{ height:'100vh', background:C.bg, display:'flex', flexDirection:'column', maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <AppHeader tab={tab} />
-      <main style={{ flex:1, overflowY:'auto', paddingBottom:84 }}>
+      <main style={{ flex:1, overflowY:'auto', paddingBottom:70 }}>
         {tab === 'planning' && <PlanningTab />}
         {tab === 'recipes'  && <RecipesTab />}
         {tab === 'shopping' && <ShoppingTab />}
