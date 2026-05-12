@@ -45,18 +45,20 @@ android {
     }
 }
 
-// ── Résolution du conflit kotlin-stdlib-jdk7/jdk8 vs kotlin-stdlib 1.8+ ──
-// androidx.appcompat tire d'anciennes versions de kotlin-stdlib-jdk7/jdk8
-// qui entrent en conflit avec la kotlin-stdlib 1.8.22 incluse par AGP.
+// Résoudre le conflit kotlin-stdlib-jdk7/jdk8 vs kotlin-stdlib 1.8+
 configurations.all {
     resolutionStrategy.eachDependency { details ->
         if (details.requested.group == 'org.jetbrains.kotlin') {
             details.useVersion '1.8.22'
-            details.because 'Uniformiser kotlin-stdlib pour éviter les classes dupliquées'
+            details.because 'Uniformiser kotlin-stdlib'
         }
     }
 }
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
+    // HTTP client avec User-Agent personnalisé (pas de CORS côté Java)
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // Parser HTML pour JSON-LD, __NEXT_DATA__, Microdata
+    implementation 'org.jsoup:jsoup:1.17.2'
 }
