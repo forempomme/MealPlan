@@ -1,0 +1,2571 @@
+import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"
+
+// ══════════════════════════════════════════════════════
+//  VERSIONING — source unique de vérité
+// ══════════════════════════════════════════════════════
+const VERSION = "2.1.0"
+
+// ══════════════════════════════════════════════════════
+//  PALETTE "ACIER NOCTURNE"
+// ══════════════════════════════════════════════════════
+const C = {
+  bg:       '#111419',
+  card:     '#181C24',
+  cardHov:  '#1E2432',
+  border:   '#2A3040',
+  accent:   '#7BA8E8',
+  accentDk: '#4878C8',
+  accentBg: 'rgba(123,168,232,0.11)',
+  green:    '#5CC4A0',
+  greenBg:  'rgba(92,196,160,0.12)',
+  text:     '#E8EAF2',
+  soft:     '#B0BDD8',
+  muted:    '#7888A8',
+  orange:   '#E8A87B',
+  orangeBg: 'rgba(232,168,123,0.12)',
+  red:      '#E87878',
+  redBg:    'rgba(232,120,120,0.10)',
+  planBg:   '#151B28',
+  planBdr:  '#243048',
+  cookedBg: 'rgba(92,196,160,0.14)',
+  yellow:   '#E8D878',
+};
+
+// ══════════════════════════════════════════════════════
+//  EMOJIS ALIMENTAIRES (~80 emojis par catégorie)
+// ══════════════════════════════════════════════════════
+const FOOD_EMOJIS = {
+  "🥩 Viandes":     ["🥩","🍗","🍖","🥓","🌭","🍔","🫀","🐄","🐓","🐖"],
+  "🐟 Poissons":    ["🐟","🐠","🦐","🦑","🦞","🦀","🐙","🍣","🦈","🫧"],
+  "🥦 Légumes":     ["🥦","🥕","🌽","🍅","🧅","🧄","🥬","🥒","🌶️","🫑","🥑","🍆","🥔","🫛","🥜","🌿"],
+  "🍎 Fruits":      ["🍎","🍊","🍋","🍌","🍇","🍓","🫐","🍑","🥝","🍍","🥭","🍒","🍐","🍈","🫒"],
+  "🍝 Plats":       ["🍝","🍜","🍲","🥘","🍛","🍱","🥗","🫕","🥫","🥙","🌮","🌯","🫔","🥡"],
+  "🍰 Desserts":    ["🍰","🎂","🧁","🍩","🍪","🍫","🍬","🍭","🍮","🧇","🥞","🍡","🍧"],
+  "🥐 Boulangerie": ["🍞","🥐","🥖","🫓","🥨","🧆","🥯","🫙"],
+  "☕ Boissons":    ["☕","🍵","🧃","🥤","🍺","🍷","🥛","🧋","🍹","🧉"],
+  "🍽 Divers":      ["🍽️","🥣","🧀","🥚","🫠","🍱","🥡","🫙","🥗","🌱"],
+};
+
+const UNITS = ['','g','kg','ml','cl','L','cs','cc','tasse','pincée','tranche','boîte','sachet','bouquet','gousse'];
+
+// ══════════════════════════════════════════════════════
+//  CATÉGORIES DE COURSES (données initiales)
+// ══════════════════════════════════════════════════════
+const DEFAULT_CATS = [
+  { id:'c1', name:'Viandes & Poissons', emoji:'🥩', kw:['poulet','bœuf','boeuf','porc','saumon','thon','viande','poisson','jambon','dinde','crevette','veau','agneau','steak','lardons','canard','filet'], order:0 },
+  { id:'c2', name:'Fruits & Légumes',   emoji:'🥦', kw:['tomate','carotte','oignon','ail','salade','courgette','poivron','champignon','épinard','epinard','banane','fraise','concombre','aubergine','brocoli','poireau','pomme de terre','citron','haricot','petits pois','navet'], order:1 },
+  { id:'c3', name:'Produits laitiers',  emoji:'🧀', kw:['lait','beurre','fromage','crème','creme','yaourt','gruyère','gruyere','parmesan','mozzarella','ricotta','emmental','camembert'], order:2 },
+  { id:'c4', name:'Œufs',              emoji:'🥚', kw:['œuf','oeuf'], order:3 },
+  { id:'c5', name:'Féculents',          emoji:'🍝', kw:['pâtes','pates','riz','quinoa','semoule','lentille','pois chiche','spaghetti','tagliatelle','gnocchi','nouille','fettuccine'], order:4 },
+  { id:'c6', name:'Épicerie',           emoji:'🫙', kw:['huile','vinaigre','sel','sucre','sauce','moutarde','ketchup','poivre','curry','cumin','paprika','cannelle','épice','epice','bouillon','fécule','chapelure','farine','levure','concentré','coulis'], order:5 },
+  { id:'c7', name:'Boulangerie',        emoji:'🥖', kw:['pain','baguette','brioche','pain de mie'], order:6 },
+  { id:'c8', name:'Boissons',           emoji:'🍶', kw:['eau','jus','vin','bière','biere','café','cafe','thé','the','sirop','limonade'], order:7 },
+  { id:'c9', name:'Autre',              emoji:'🛍️', kw:[], order:8 },
+];
+
+// ══════════════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════════════
+const genId = () => Math.random().toString(36).slice(2, 10);
+const ts    = () => Date.now();
+
+function getISOWeekKey(date = new Date()) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const year = d.getUTCFullYear();
+  const week = Math.ceil(((d - new Date(Date.UTC(year, 0, 1))) / 864e5 + 1) / 7);
+  return `${year}-W${String(week).padStart(2, '0')}`;
+}
+
+function getWeekStart(key) {
+  const [y, wn] = key.split('-W').map(Number);
+  const jan4 = new Date(y, 0, 4);
+  const d = new Date(jan4);
+  d.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7) + (wn - 1) * 7);
+  return d;
+}
+
+function getWeekRange(key) {
+  const s = getWeekStart(key);
+  const e = new Date(s); e.setDate(s.getDate() + 6);
+  const fmt = d => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  return `${fmt(s)} – ${fmt(e)}`;
+}
+
+function shiftWeek(key, n) {
+  const d = getWeekStart(key);
+  d.setDate(d.getDate() + n * 7);
+  return getISOWeekKey(d);
+}
+
+function categorize(name, cats) {
+  const low = name.toLowerCase();
+  for (const c of [...cats].sort((a, b) => a.order - b.order)) {
+    if (!c.kw || c.kw.length === 0) continue;
+    if (c.kw.some(k => low.includes(k.toLowerCase()))) return c.id;
+  }
+  return cats.find(c => !c.kw || c.kw.length === 0)?.id ?? cats[cats.length - 1]?.id;
+}
+
+// ══════════════════════════════════════════════════════
+//  DONNÉES INITIALES (démo)
+// ══════════════════════════════════════════════════════
+const CW = getISOWeekKey();
+
+const INIT_RECIPES = [
+  { id:'r1', name:'Poulet rôti aux herbes', emoji:'🍗', portions:4, url:'', tags:['volaille','four'], favorite:true, rating:5, cookTimeMinutes:75, note:'Délicieux avec des pommes de terre rôties',
+    ingredients:[{id:'i1',name:'Poulet entier',qty:1,unit:''},{id:'i2',name:'Thym frais',qty:3,unit:'branche'},{id:'i3',name:'Ail',qty:4,unit:'gousse'},{id:'i4',name:"Huile d'olive",qty:3,unit:'cs'},{id:'i5',name:'Sel',qty:1,unit:'pincée'},{id:'i6',name:'Pommes de terre',qty:600,unit:'g'}],
+    steps:["Préchauffer le four à 200°C","Frotter le poulet avec l'huile, les herbes et le sel","Glisser l'ail sous la peau","Disposer les pommes de terre autour","Enfourner 1h15 en arrosant toutes les 20 min"],
+    createdAt: ts()-864e5*10 },
+  { id:'r2', name:'Pasta Carbonara', emoji:'🍝', portions:2, url:'', tags:['pâtes','rapide'], favorite:true, rating:5, cookTimeMinutes:20, note:'Ne jamais utiliser de crème !',
+    ingredients:[{id:'i1',name:'Spaghetti',qty:200,unit:'g'},{id:'i2',name:'Lardons fumés',qty:150,unit:'g'},{id:'i3',name:'Œufs',qty:3,unit:''},{id:'i4',name:'Parmesan râpé',qty:80,unit:'g'},{id:'i5',name:'Poivre noir',qty:1,unit:'pincée'}],
+    steps:['Cuire les pâtes al dente dans de l\'eau bien salée','Faire revenir les lardons sans matière grasse','Dans un bol, mélanger œufs, parmesan et poivre','Égoutter les pâtes en gardant un peu d\'eau','Mélanger hors du feu en ajoutant l\'eau de cuisson'],
+    createdAt: ts()-864e5*7 },
+  { id:'r3', name:'Soupe de légumes', emoji:'🥣', portions:4, url:'', tags:['légumes','soupe','hiver'], favorite:false, rating:4, cookTimeMinutes:40, note:'Servir avec du pain grillé frotté à l\'ail',
+    ingredients:[{id:'i1',name:'Carottes',qty:3,unit:''},{id:'i2',name:'Courgettes',qty:2,unit:''},{id:'i3',name:'Poireaux',qty:2,unit:''},{id:'i4',name:'Pommes de terre',qty:2,unit:''},{id:'i5',name:'Bouillon de légumes',qty:1,unit:'L'}],
+    steps:['Éplucher et couper tous les légumes en morceaux','Faire revenir les poireaux dans un filet d\'huile','Ajouter le bouillon et tous les légumes','Cuire 30 min à feu moyen','Mixer selon la consistance souhaitée'],
+    createdAt: ts()-864e5*5 },
+  { id:'r4', name:'Saumon en papillote', emoji:'🐟', portions:2, url:'', tags:['poisson','santé','four'], favorite:false, rating:4, cookTimeMinutes:25, note:'Accompagner de riz ou de quinoa',
+    ingredients:[{id:'i1',name:'Pavé de saumon',qty:2,unit:''},{id:'i2',name:'Citron',qty:1,unit:''},{id:'i3',name:'Aneth',qty:1,unit:'bouquet'},{id:'i4',name:'Beurre',qty:20,unit:'g'},{id:'i5',name:'Sel',qty:1,unit:'pincée'}],
+    steps:['Préchauffer le four à 180°C','Placer chaque pavé sur une feuille d\'aluminium','Ajouter une rondelle de citron, l\'aneth et une noisette de beurre','Fermer hermétiquement la papillote','Cuire 20 min au four'],
+    createdAt: ts()-864e5*3 },
+  { id:'r5', name:'Tarte aux pommes', emoji:'🥧', portions:6, url:'', tags:['dessert','four'], favorite:false, rating:5, cookTimeMinutes:50, note:'Délicieux tiède avec une boule de glace vanille',
+    ingredients:[{id:'i1',name:'Pâte brisée',qty:1,unit:''},{id:'i2',name:'Pommes',qty:4,unit:''},{id:'i3',name:'Sucre',qty:80,unit:'g'},{id:'i4',name:'Beurre',qty:30,unit:'g'},{id:'i5',name:'Cannelle',qty:1,unit:'cc'}],
+    steps:['Préchauffer à 180°C et étaler la pâte dans un moule','Éplucher, épépiner et trancher les pommes finement','Disposer en rosace sur la pâte','Saupoudrer de sucre et cannelle, ajouter les noisettes de beurre','Cuire 40-45 min jusqu\'à ce que les pommes soient dorées'],
+    createdAt: ts()-864e5*2 },
+];
+
+const INIT_MEALS = [
+  { id:'m1', weekKey:CW,                    recipeId:'r1', persons:4, done:false, addedAt:ts()-864e5 },
+  { id:'m2', weekKey:CW,                    recipeId:'r2', persons:2, done:true,  addedAt:ts()-864e5*2 },
+  { id:'m3', weekKey:shiftWeek(CW,-1),      recipeId:'r3', persons:4, done:true,  addedAt:ts()-864e5*10 },
+  { id:'m4', weekKey:shiftWeek(CW,-1),      recipeId:'r4', persons:2, done:true,  addedAt:ts()-864e5*9 },
+  { id:'m5', weekKey:shiftWeek(CW, 1),      recipeId:'r2', persons:4, done:false, addedAt:ts()-864e5 },
+];
+
+// ══════════════════════════════════════════════════════
+//  CONTEXT
+// ══════════════════════════════════════════════════════
+const AppCtx = createContext(null);
+const useApp = () => useContext(AppCtx);
+
+function AppProvider({ children }) {
+  const [recipes,  setRecipes]  = useState(INIT_RECIPES);
+  const [meals,    setMeals]    = useState(INIT_MEALS);
+  const [shopping, setShopping] = useState([]);
+  const [cats,     setCats]     = useState(DEFAULT_CATS);
+  const [settings, setSettings] = useState({ weeksToShow: 4 });
+  const [snack,    setSnack]    = useState(null);
+  const snackRef = useRef(null);
+
+  const showSnack = useCallback((msg, undo) => {
+    clearTimeout(snackRef.current);
+    setSnack({ msg, undo });
+    snackRef.current = setTimeout(() => setSnack(null), 3500);
+  }, []);
+
+  /* ── Recettes ── */
+  const addRecipe    = d => setRecipes(p => [{ ...d, id: genId(), createdAt: ts() }, ...p]);
+  const updateRecipe = d => setRecipes(p => p.map(r => r.id === d.id ? d : r));
+  const deleteRecipe = id => {
+    setRecipes(p  => p.filter(r => r.id !== id));
+    setMeals(p    => p.filter(m => m.recipeId !== id));
+    setShopping(p => p.filter(s => s.fromRecipeId !== id));
+  };
+
+  /* ── Repas ── */
+  const addMeal = (weekKey, recipeId, persons) => {
+    setMeals(p => [...p, { id: genId(), weekKey, recipeId, persons, done: false, addedAt: ts() }]);
+    const rec = recipes.find(r => r.id === recipeId);
+    if (rec?.ingredients?.length) {
+      const scale = persons / (rec.portions || 4);
+      setShopping(p => [...p, ...rec.ingredients.map(ing => ({
+        id: genId(), name: ing.name,
+        qty:  ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0,
+        unit: ing.unit || '',
+        categoryId: categorize(ing.name, cats),
+        fromRecipeId: recipeId, checked: false,
+        sortOrder: ts() + Math.random(), addedAt: ts(),
+      }))]);
+    }
+  };
+
+  const updateMealPersons = (id, delta) =>
+    setMeals(p => p.map(m => m.id === id ? { ...m, persons: Math.max(1, m.persons + delta) } : m));
+
+  const toggleMealDone = id =>
+    setMeals(p => p.map(m => m.id === id ? { ...m, done: !m.done } : m));
+
+  const deleteMeal = id => {
+    const meal = meals.find(m => m.id === id);
+    if (!meal) return;
+    const hasOther = meals.some(m => m.id !== id && m.weekKey === meal.weekKey && m.recipeId === meal.recipeId);
+    if (!hasOther) setShopping(p => p.filter(s => s.fromRecipeId !== meal.recipeId));
+    setMeals(p => p.filter(m => m.id !== id));
+  };
+
+  const duplicateWeek = (from, to) => {
+    const src = meals.filter(m => m.weekKey === from);
+    setMeals(p => [...p, ...src.map(m => ({ ...m, id: genId(), weekKey: to, done: false, addedAt: ts() }))]);
+  };
+
+  /* ── Courses ── */
+  const addShoppingItem = (name, qty, unit) =>
+    setShopping(p => [...p, {
+      id: genId(), name, qty: parseFloat(qty)||0, unit: unit||'',
+      categoryId: categorize(name, cats), fromRecipeId: null,
+      checked: false, sortOrder: ts(), addedAt: ts(),
+    }]);
+
+  const deleteShoppingItem = id => {
+    const item = shopping.find(s => s.id === id);
+    setShopping(p => p.filter(s => s.id !== id));
+    if (item) showSnack(`"${item.name}" supprimé`, () => setShopping(p => [...p, item]));
+  };
+
+  const clearChecked = () => setShopping(p => p.filter(s => !s.checked));
+  const clearAll     = () => setShopping([]);
+
+  const updateShoppingItem = (id, patch) =>
+    setShopping(p => p.map(s => s.id === id ? { ...s, ...patch } : s));
+
+  const reorderItemsInCat = (catId, orderedIds) =>
+    setShopping(prev => {
+      const other = prev.filter(s => s.categoryId !== catId);
+      const reordered = orderedIds
+        .map((id, i) => { const s = prev.find(x => x.id === id); return s ? { ...s, sortOrder: i } : null; })
+        .filter(Boolean);
+      return [...other, ...reordered];
+    });
+
+  /* ── Catégories ── */
+  const addCat = ({ name, emoji='📦', kw=[] }) =>
+    setCats(p => [...p, { id: genId(), name, emoji, kw, order: p.length }]);
+  const deleteCat = id => {
+    const fb = cats.find(c => c.id !== id && (!c.kw || c.kw.length === 0))?.id ?? cats.find(c => c.id !== id)?.id;
+    setCats(p => p.filter(c => c.id !== id));
+    setShopping(p => p.map(s => s.categoryId === id ? { ...s, categoryId: fb } : s));
+  };
+  const updateCat   = c    => setCats(p => p.map(x => x.id === c.id ? c : x));
+  const reorderCats = list => setCats(list.map((c, i) => ({ ...c, order: i })));
+  const updSettings = patch => setSettings(p => ({ ...p, ...patch }));
+
+  const importAllData = (data) => {
+    if (data.recipes)  setRecipes(data.recipes);
+    if (data.meals)    setMeals(data.meals);
+    if (data.shopping) setShopping(data.shopping);
+    if (data.cats)     setCats(data.cats);
+    if (data.settings) setSettings(data.settings);
+  };
+
+  return (
+    <AppCtx.Provider value={{
+      recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
+      addRecipe, updateRecipe, deleteRecipe,
+      addMeal, updateMealPersons, toggleMealDone, deleteMeal, duplicateWeek,
+      addShoppingItem, deleteShoppingItem, updateShoppingItem, clearChecked, clearAll,
+      reorderItemsInCat, addCat, deleteCat, updateCat, reorderCats, updSettings, importAllData,
+    }}>
+      {children}
+    </AppCtx.Provider>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  PRIMITIVES UI
+// ══════════════════════════════════════════════════════
+function Btn({ onClick, children, variant='default', small, disabled, style }) {
+  const base = {
+    display:'inline-flex', alignItems:'center', gap:5,
+    padding: small ? '5px 12px' : '8px 18px',
+    borderRadius:9, fontWeight:500, fontSize: small?12:14,
+    transition:'all 0.15s', cursor: disabled?'not-allowed':'pointer',
+    opacity: disabled?0.5:1, border:'none', flexShrink:0,
+  };
+  const vs = {
+    default: { background:C.border,   color:C.text },
+    primary: { background:C.accentDk, color:'#fff' },
+    green:   { background:C.greenBg,  color:C.green,  border:`1px solid ${C.green}44` },
+    danger:  { background:C.redBg,    color:C.red,    border:`1px solid ${C.red}44` },
+    ghost:   { background:'transparent', color:C.muted },
+    accent:  { background:C.accentBg, color:C.accent, border:`1px solid ${C.accent}44` },
+  };
+  return (
+    <button onClick={disabled?undefined:onClick} style={{ ...base, ...vs[variant], ...style }}>
+      {children}
+    </button>
+  );
+}
+
+function BottomSheet({ title, onClose, children }) {
+  return (
+    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+      position:'fixed', inset:0, zIndex:1000, background:'rgba(0,0,0,0.65)',
+      display:'flex', alignItems:'flex-end', animation:'fadeIn 0.15s',
+    }}>
+      <div style={{
+        width:'100%', maxWidth:480, margin:'0 auto',
+        background:C.card, borderRadius:'20px 20px 0 0',
+        maxHeight:'88vh', overflow:'hidden', display:'flex', flexDirection:'column',
+        animation:'slideUp 0.22s ease',
+      }}>
+        <div style={{
+          padding:'14px 18px 12px', borderBottom:`1px solid ${C.border}`,
+          display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0,
+        }}>
+          <span style={{ fontWeight:700, fontSize:15, color:C.text }}>{title}</span>
+          <button onClick={onClose} style={{
+            background:C.border, border:'none', color:C.muted,
+            width:26, height:26, borderRadius:'50%', cursor:'pointer', fontSize:16, lineHeight:1,
+          }}>×</button>
+        </div>
+        <div style={{ overflowY:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function EmojiPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position:'relative' }}>
+      <button onClick={() => setOpen(o=>!o)} style={{
+        fontSize:32, background:C.border, border:'none', borderRadius:12,
+        width:60, height:60, cursor:'pointer',
+        display:'flex', alignItems:'center', justifyContent:'center',
+      }}>
+        {value || '🍽️'}
+      </button>
+      {open && (
+        <div style={{
+          position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:18,
+          padding:18, zIndex:2000, width:320, maxHeight:'72vh', overflowY:'auto',
+          boxShadow:'0 24px 64px rgba(0,0,0,0.7)', animation:'fadeIn 0.15s',
+        }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+            <span style={{ fontWeight:700, color:C.text }}>Choisir un emoji</span>
+            <button onClick={() => setOpen(false)} style={{ background:C.border, border:'none', color:C.muted, borderRadius:8, padding:'3px 10px', cursor:'pointer' }}>✕</button>
+          </div>
+          {Object.entries(FOOD_EMOJIS).map(([cat, emojis]) => (
+            <div key={cat} style={{ marginBottom:14 }}>
+              <div style={{ fontSize:11, color:C.muted, marginBottom:6, fontWeight:600 }}>{cat}</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+                {emojis.map(e => (
+                  <button key={e} onClick={() => { onChange(e); setOpen(false); }} style={{
+                    fontSize:20, background: value===e ? C.accentBg : 'transparent',
+                    border: value===e ? `1px solid ${C.accent}` : '1px solid transparent',
+                    borderRadius:7, padding:4, cursor:'pointer', width:36, height:36,
+                  }}>{e}</button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stars({ value, onChange, small }) {
+  return (
+    <div style={{ display:'flex', gap:1 }}>
+      {[1,2,3,4,5].map(n => (
+        <button key={n} onClick={onChange ? () => onChange(n) : undefined} style={{
+          background:'none', border:'none', fontSize: small?14:19,
+          color: n<=value ? '#E8C858' : C.border, cursor: onChange?'pointer':'default', padding:2,
+        }}>★</button>
+      ))}
+    </div>
+  );
+}
+
+function SecTitle({ children }) {
+  return <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10, marginTop:20 }}>{children}</div>;
+}
+
+function EmptyState({ icon, text }) {
+  return (
+    <div style={{ textAlign:'center', padding:'50px 20px', color:C.muted }}>
+      <div style={{ fontSize:52, marginBottom:12 }}>{icon}</div>
+      <div style={{ fontSize:14 }}>{text}</div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  HEADER & NAV
+// ══════════════════════════════════════════════════════
+const TABS = [
+  { id:'planning', icon:'📅', label:'Planning' },
+  { id:'recipes',  icon:'📖', label:'Recettes' },
+  { id:'shopping', icon:'🛒', label:'Courses' },
+  { id:'stats',    icon:'📊', label:'Stats' },
+  { id:'settings', icon:'⚙️', label:'Options' },
+];
+
+function AppHeader({ tab }) {
+  const t = TABS.find(x => x.id===tab);
+  return (
+    <header style={{
+      background:C.card, borderBottom:`1px solid ${C.border}`,
+      padding:'10px 16px', display:'flex', justifyContent:'space-between', alignItems:'center',
+      position:'sticky', top:0, zIndex:100, flexShrink:0,
+    }}>
+      <div>
+        <div style={{ fontWeight:800, fontSize:16, color:C.text, letterSpacing:'-0.02em' }}>🍽 Meal Plan</div>
+        <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>{t?.icon} {t?.label}</div>
+      </div>
+      <div style={{
+        background:C.accentBg, color:C.accent,
+        fontSize:11, fontWeight:700, padding:'4px 11px', borderRadius:20,
+        border:`1px solid ${C.accent}33`, letterSpacing:'0.02em',
+      }}>v{VERSION}</div>
+    </header>
+  );
+}
+
+function BottomNav({ tab, setTab }) {
+  const { shopping } = useApp();
+  const shopCount = shopping.filter(s => !s.checked).length;
+  return (
+    <nav style={{
+      position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)',
+      width:'100%', maxWidth:480, background:C.card, borderTop:`1px solid ${C.border}`,
+      display:'flex', zIndex:100,
+    }}>
+      {TABS.map(item => (
+        <button key={item.id} onClick={() => setTab(item.id)} style={{
+          flex:1, background:'none', border:'none', padding:'8px 0',
+          display:'flex', flexDirection:'column', alignItems:'center', gap:2,
+          color: tab===item.id ? C.accent : C.muted,
+          transition:'color 0.15s', cursor:'pointer',
+        }}>
+          <div style={{ position:'relative' }}>
+            <span style={{ fontSize:19 }}>{item.icon}</span>
+            {item.id === 'shopping' && shopCount > 0 && (
+              <span style={{
+                position:'absolute', top:-4, right:-7,
+                background:C.accent, color:'#fff', borderRadius:'50%',
+                width:15, height:15, fontSize:9, fontWeight:700,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                lineHeight:1,
+              }}>{shopCount > 99 ? '99' : shopCount}</span>
+            )}
+          </div>
+          <span style={{ fontSize:9, fontWeight:tab===item.id?700:400, letterSpacing:'0.04em' }}>
+            {item.label.toUpperCase()}
+          </span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  PLANNING TAB
+// ══════════════════════════════════════════════════════
+function PlanningTab() {
+  const { meals, addMeal, duplicateWeek } = useApp();
+  const [pickerWeek,  setPickerWeek]  = useState(null);
+  const [dupWeek,     setDupWeek]     = useState(null);
+  const [btnVisible,  setBtnVisible]  = useState(false);
+  const currentWeek    = getISOWeekKey();
+  const currentWeekRef = useRef(null);
+
+  // 52/53 semaines de l'année, ordre ascendant
+  const allWeeks = useMemo(() => {
+    const year  = new Date().getFullYear();
+    const jan4  = new Date(year, 0, 4);
+    const start = new Date(jan4);
+    start.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+    const weeks = [];
+    for (let i = 0; i < 53; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i * 7);
+      const key = getISOWeekKey(d);
+      if (key.startsWith(String(year))) weeks.push(key);
+    }
+    return weeks;
+  }, []);
+
+  // Scroll initial centré sur la semaine en cours
+  useEffect(() => {
+    const t = setTimeout(() => {
+      currentWeekRef.current?.scrollIntoView({ behavior: 'auto', block: 'center' });
+    }, 80);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Bouton visible dès que la carte de la semaine en cours sort de l'écran
+  useEffect(() => {
+    // On attend que le scroll initial soit fait, puis on attache sur <main>
+    const t = setTimeout(() => {
+      const el      = currentWeekRef.current;
+      if (!el) return;
+      const scroller = el.closest('main') || document.documentElement;
+
+      const check = () => {
+        if (!currentWeekRef.current) return;
+        const elR  = currentWeekRef.current.getBoundingClientRect();
+        const conR = scroller.getBoundingClientRect();
+        setBtnVisible(!(elR.top < conR.bottom && elR.bottom > conR.top));
+      };
+
+      scroller.addEventListener('scroll', check, { passive: true });
+      check(); // état initial
+      // stocke le cleanup dans l'élément pour le retrouver au démontage
+      el._cleanupScroll = () => scroller.removeEventListener('scroll', check);
+    }, 150);
+
+    return () => {
+      clearTimeout(t);
+      currentWeekRef.current?._cleanupScroll?.();
+    };
+  }, []);
+
+  const scrollToCurrent = () =>
+    currentWeekRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  return (
+    <div style={{ position:'relative' }}>
+      {/* Bouton flottant — uniquement quand la semaine est hors écran */}
+      {btnVisible && (
+        <div style={{
+          position:'sticky', top:4, zIndex:50,
+          display:'flex', justifyContent:'flex-end',
+          padding:'0 12px', pointerEvents:'none',
+        }}>
+          <Btn onClick={scrollToCurrent} variant="accent" small
+            style={{ pointerEvents:'all', boxShadow:'0 3px 14px rgba(0,0,0,0.45)' }}>
+            📅 Semaine en cours
+          </Btn>
+        </div>
+      )}
+
+      <div style={{ padding:'8px 12px 12px' }}>
+        {allWeeks.map(wk => (
+          <div key={wk} ref={wk === currentWeek ? currentWeekRef : null}>
+            <WeekCard weekKey={wk} isCurrent={wk === currentWeek}
+              onAdd={() => setPickerWeek(wk)}
+              onDup={() => setDupWeek(wk)}
+            />
+          </div>
+        ))}
+      </div>
+
+      {pickerWeek && (
+        <RecipePicker
+          onClose={() => setPickerWeek(null)}
+          onSelect={(recipeIds, persons) => {
+            recipeIds.forEach(id => addMeal(pickerWeek, id, persons));
+            setPickerWeek(null);
+          }}
+        />
+      )}
+      {dupWeek && (
+        <DupWeekModal fromKey={dupWeek} onClose={() => setDupWeek(null)}
+          onDup={to => { duplicateWeek(dupWeek, to); setDupWeek(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function WeekCard({ weekKey, isCurrent, onAdd, onDup }) {
+  const { meals, recipes } = useApp();
+  const [expanded, setExpanded] = useState(isCurrent);
+  const weekMeals = meals.filter(m => m.weekKey === weekKey);
+  const wn = weekKey.split('-W')[1];
+
+  const shareWeek = () => {
+    const text = `📅 Semaine ${wn} — ${getWeekRange(weekKey)}\n\n` +
+      weekMeals.map(m => {
+        const r = recipes.find(x => x.id === m.recipeId);
+        return r ? `${r.emoji} ${r.name} (${m.persons} pers.)` : '';
+      }).filter(Boolean).join('\n');
+    if (navigator.share) navigator.share({ title: 'Menu semaine', text });
+    else navigator.clipboard?.writeText(text).catch(() => {});
+  };
+
+  // Bleu ciel clair bien visible pour la semaine en cours
+  const curBg  = 'rgba(100, 185, 255, 0.13)';
+  const curBdr = 'rgba(100, 185, 255, 0.55)';
+
+  return (
+    <div style={{
+      background: isCurrent ? curBg : C.card,
+      border: `1px solid ${isCurrent ? curBdr : C.border}`,
+      borderRadius:12, marginBottom:6, overflow:'hidden',
+    }}>
+      <div onClick={() => setExpanded(e => !e)} style={{
+        padding:'7px 12px', display:'flex', justifyContent:'space-between', alignItems:'center',
+        cursor:'pointer', borderBottom: expanded ? `1px solid ${C.border}33` : 'none',
+        userSelect:'none',
+      }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          {isCurrent && (
+            <span style={{
+              fontSize:10, background:'rgba(100,185,255,0.2)', color:'#64B9FF',
+              padding:'2px 8px', borderRadius:10, fontWeight:700, letterSpacing:'0.04em',
+              border:'1px solid rgba(100,185,255,0.4)',
+            }}>EN COURS</span>
+          )}
+          <span style={{ fontWeight:600, fontSize:13, color: isCurrent ? '#64B9FF' : C.text }}>
+            S{wn}
+          </span>
+          <span style={{ fontSize:11, color:C.muted }}>{getWeekRange(weekKey)}</span>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          {weekMeals.length > 0 && (
+            <span style={{ fontSize:11, color:C.muted }}>{weekMeals.length} repas</span>
+          )}
+          <span style={{ color:C.muted, fontSize:11 }}>{expanded ? '▲' : '▼'}</span>
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={{ padding:'6px 10px 10px' }}>
+          {weekMeals.length === 0 && (
+            <div style={{ padding:'8px 0', color:C.muted, fontSize:12, textAlign:'center' }}>
+              Aucun repas — cliquez sur + pour ajouter
+            </div>
+          )}
+          {weekMeals.map(meal => {
+            const recipe = recipes.find(r => r.id === meal.recipeId);
+            return recipe ? <MealItem key={meal.id} meal={meal} recipe={recipe} /> : null;
+          })}
+          <div style={{ display:'flex', gap:6, marginTop:6, flexWrap:'wrap' }}>
+            <Btn onClick={onAdd} variant="primary" small>+ Ajouter</Btn>
+            <Btn onClick={onDup} variant="ghost" small>📋</Btn>
+            {weekMeals.length > 0 && <Btn onClick={shareWeek} variant="ghost" small>📤</Btn>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MealItem({ meal, recipe }) {
+  const { toggleMealDone, updateMealPersons, deleteMeal } = useApp();
+  const [confirm, setConfirm] = useState(false);
+
+  const handleDelete = () => {
+    if (confirm) { deleteMeal(meal.id); }
+    else { setConfirm(true); setTimeout(() => setConfirm(false), 3000); }
+  };
+
+  return (
+    <div style={{
+      display:'flex', alignItems:'center', gap:6,
+      background: meal.done ? C.cookedBg : C.planBg,
+      border:`1px solid ${meal.done ? C.green+'33' : C.planBdr}`,
+      borderRadius:9, padding:'6px 8px', marginBottom:4, transition:'all 0.2s',
+    }}>
+      {/* Bouton cuisinée */}
+      <button onClick={() => toggleMealDone(meal.id)} style={{
+        width:22, height:22, borderRadius:'50%',
+        border:`2px solid ${meal.done ? C.green : C.border}`,
+        background: meal.done ? C.green : 'transparent',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        cursor:'pointer', color:'#fff', fontSize:11, flexShrink:0, transition:'all 0.2s',
+      }}>
+        {meal.done ? '✓' : ''}
+      </button>
+
+      <span style={{ fontSize:16, flexShrink:0 }}>{recipe.emoji}</span>
+
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{
+          fontWeight:500, fontSize:13, color: meal.done ? C.muted : C.text,
+          textDecoration: meal.done ? 'line-through' : 'none',
+          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+        }}>{recipe.name}</div>
+      </div>
+
+      {/* Personnes */}
+      <div style={{ display:'flex', alignItems:'center', gap:2, flexShrink:0 }}>
+        <button onClick={() => updateMealPersons(meal.id, -1)} style={{
+          background:C.border, border:'none', color:C.text,
+          width:18, height:18, borderRadius:4, cursor:'pointer', fontSize:12, lineHeight:1,
+        }}>−</button>
+        <span style={{ fontSize:11, color:C.muted, minWidth:20, textAlign:'center' }}>👥{meal.persons}</span>
+        <button onClick={() => updateMealPersons(meal.id, +1)} style={{
+          background:C.border, border:'none', color:C.text,
+          width:18, height:18, borderRadius:4, cursor:'pointer', fontSize:12, lineHeight:1,
+        }}>+</button>
+      </div>
+
+      {/* Supprimer */}
+      <button onClick={handleDelete} style={{
+        background: confirm ? C.redBg : 'transparent',
+        border: confirm ? `1px solid ${C.red}33` : 'none',
+        color: confirm ? C.red : C.muted,
+        borderRadius:6, padding:'2px 5px', cursor:'pointer', fontSize:11, flexShrink:0, transition:'all 0.2s',
+      }}>
+        {confirm ? '✓' : '🗑'}
+      </button>
+    </div>
+  );
+}
+
+function RecipePicker({ onClose, onSelect }) {
+  const { recipes } = useApp();
+  const [search,   setSearch]   = useState('');
+  const [persons,  setPersons]  = useState(4);
+  const [selected, setSelected] = useState(new Set()); // multi-sélection
+
+  const toggle = id => setSelected(s => {
+    const ns = new Set(s); ns.has(id) ? ns.delete(id) : ns.add(id); return ns;
+  });
+
+  const filtered = recipes.filter(r => r.name.toLowerCase().includes(search.toLowerCase()));
+  const count = selected.size;
+
+  return (
+    <BottomSheet title="Ajouter des repas" onClose={onClose}>
+      <div style={{ padding:'10px 14px' }}>
+        {/* Personnes */}
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+          <span style={{ color:C.muted, fontSize:13, flex:1 }}>👥 Personnes pour tous</span>
+          <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>−</button>
+          <span style={{ fontWeight:700, color:C.text, minWidth:22, textAlign:'center', fontSize:14 }}>{persons}</span>
+          <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>+</button>
+        </div>
+
+        <input placeholder="🔍 Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}
+          style={{ marginBottom:8, padding:'7px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, width:'100%', fontSize:13, outline:'none' }}
+        />
+
+        {/* Recettes avec cases à cocher */}
+        <div style={{ maxHeight:360, overflowY:'auto' }}>
+          {filtered.map(r => {
+            const checked = selected.has(r.id);
+            return (
+              <div key={r.id} onClick={() => toggle(r.id)} style={{
+                display:'flex', alignItems:'center', gap:10, padding:'8px 10px',
+                borderRadius:9, marginBottom:4, cursor:'pointer', transition:'all 0.12s',
+                background: checked ? C.accentBg : C.bg,
+                border:`1px solid ${checked ? C.accent+'44' : C.border}`,
+              }}>
+                {/* Checkbox */}
+                <div style={{
+                  width:18, height:18, borderRadius:5, flexShrink:0,
+                  background: checked ? C.accentDk : 'transparent',
+                  border:`2px solid ${checked ? C.accentDk : C.border}`,
+                  display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.12s',
+                }}>
+                  {checked && <span style={{ color:'#fff', fontSize:10, fontWeight:700 }}>✓</span>}
+                </div>
+                <span style={{ fontSize:22, flexShrink:0 }}>{r.emoji}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontWeight:500, fontSize:13, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</div>
+                  <div style={{ fontSize:11, color:C.muted }}>
+                    {r.portions}p{r.cookTimeMinutes ? ` · ⏱ ${r.cookTimeMinutes}min` : ''}{r.favorite ? ' · ⭐' : ''}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {filtered.length === 0 && <div style={{ textAlign:'center', padding:20, color:C.muted, fontSize:13 }}>Aucune recette</div>}
+        </div>
+
+        <Btn
+          onClick={() => count > 0 && onSelect([...selected], persons)}
+          variant="primary" disabled={count === 0}
+          style={{ width:'100%', justifyContent:'center', marginTop:10 }}
+        >
+          {count === 0 ? 'Sélectionne des recettes' : `Ajouter ${count} repas`}
+        </Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function DupWeekModal({ fromKey, onClose, onDup }) {
+  const currentWeek = getISOWeekKey();
+  const [target, setTarget] = useState(shiftWeek(currentWeek, 1));
+  const options = [];
+  for (let i = 0; i < 8; i++) options.push(shiftWeek(currentWeek, i));
+
+  return (
+    <BottomSheet title="Dupliquer la semaine" onClose={onClose}>
+      <div style={{ padding:16 }}>
+        <div style={{ color:C.muted, fontSize:13, marginBottom:12 }}>
+          Copier la semaine {fromKey.split('-W')[1]} vers :
+        </div>
+        {options.filter(w => w !== fromKey).map(w => (
+          <div key={w} onClick={() => setTarget(w)} style={{
+            padding:'10px 14px', borderRadius:11, marginBottom:6, cursor:'pointer',
+            background: target===w ? C.accentBg : C.bg,
+            border:`1px solid ${target===w ? C.accent+'55' : C.border}`,
+          }}>
+            <span style={{ fontWeight:500, color:C.text }}>Semaine {w.split('-W')[1]}</span>
+            <span style={{ fontSize:12, color:C.muted, marginLeft:8 }}>{getWeekRange(w)}</span>
+          </div>
+        ))}
+        <Btn onClick={() => onDup(target)} variant="primary" style={{ width:'100%', justifyContent:'center', marginTop:12 }}>
+          Dupliquer →
+        </Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  RECETTES TAB
+// ══════════════════════════════════════════════════════
+function RecipesTab() {
+  const { recipes, addRecipe, updateRecipe, deleteRecipe } = useApp();
+  const [search,      setSearch]      = useState('');
+  const [filterFav,   setFilterFav]   = useState(false);
+  const [filterTag,   setFilterTag]   = useState('');
+  const [filterOpen,  setFilterOpen]  = useState(false);
+  const [detailId,    setDetailId]    = useState(null);
+  const [editRec,     setEditRec]     = useState(null);
+
+  const allTags = useMemo(() => {
+    const s = new Set(); recipes.forEach(r => (r.tags||[]).forEach(t => s.add(t))); return [...s];
+  }, [recipes]);
+
+  const activeFilters = (filterFav ? 1 : 0) + (filterTag ? 1 : 0);
+
+  const filtered = recipes.filter(r =>
+    (!filterFav || r.favorite) &&
+    (!filterTag || (r.tags||[]).includes(filterTag)) &&
+    (!search    || r.name.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const detailRecipe = recipes.find(r => r.id === detailId);
+
+  const blankRecipe = () => ({
+    name:'', emoji:'🍽️', portions:4, url:'', tags:[], favorite:false,
+    rating:0, cookTimeMinutes:0, note:'',
+    ingredients:[{ id:genId(), name:'', qty:'', unit:'' }],
+    steps:[''],
+  });
+
+  return (
+    <div style={{ padding:12 }}>
+      {/* Recherche + Filtrer */}
+      <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+        <input placeholder="🔍 Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}
+          style={{ flex:1, padding:'7px 11px', background:C.card, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none' }}
+        />
+        <button onClick={() => setFilterOpen(true)} style={{
+          position:'relative', background: activeFilters > 0 ? C.accentBg : C.card,
+          border:`1px solid ${activeFilters > 0 ? C.accent+'55' : C.border}`,
+          color: activeFilters > 0 ? C.accent : C.muted,
+          padding:'7px 13px', borderRadius:9, cursor:'pointer', fontSize:13, fontWeight:500,
+          flexShrink:0,
+        }}>
+          ⚙ Filtrer
+          {activeFilters > 0 && (
+            <span style={{
+              position:'absolute', top:-5, right:-5,
+              background:C.accent, color:'#fff', borderRadius:'50%',
+              width:16, height:16, fontSize:10, fontWeight:700,
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}>{activeFilters}</span>
+          )}
+        </button>
+      </div>
+
+      <Btn onClick={() => setEditRec(blankRecipe())} variant="primary" small style={{ marginBottom:12 }}>
+        + Nouvelle recette
+      </Btn>
+
+      {/* Grille compacte */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+        {filtered.map(r => (
+          <RecipeCard key={r.id} recipe={r}
+            onClick={() => setDetailId(r.id)}
+            onDelete={() => deleteRecipe(r.id)}
+          />
+        ))}
+      </div>
+      {filtered.length === 0 && <EmptyState icon="📖" text="Aucune recette trouvée" />}
+
+      {filterOpen && (
+        <FilterModal
+          onClose={() => setFilterOpen(false)}
+          filterFav={filterFav} setFilterFav={setFilterFav}
+          filterTag={filterTag} setFilterTag={setFilterTag}
+          allTags={allTags}
+        />
+      )}
+
+      {detailRecipe && (
+        <RecipeDetail recipe={detailRecipe}
+          onClose={() => setDetailId(null)}
+          onEdit={() => { setEditRec({ ...detailRecipe }); setDetailId(null); }}
+          onDelete={() => { deleteRecipe(detailRecipe.id); setDetailId(null); }}
+        />
+      )}
+
+      {editRec && (
+        <RecipeEditor recipe={editRec} onClose={() => setEditRec(null)}
+          onSave={data => {
+            if (data.id && recipes.find(r => r.id === data.id)) updateRecipe(data);
+            else addRecipe(data);
+            setEditRec(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function FilterModal({ onClose, filterFav, setFilterFav, filterTag, setFilterTag, allTags }) {
+  const activeCount = (filterFav ? 1 : 0) + (filterTag ? 1 : 0);
+  return (
+    <BottomSheet title="Filtrer les recettes" onClose={onClose}>
+      <div style={{ padding:16 }}>
+        <SecTitle>Affichage</SecTitle>
+        <div onClick={() => setFilterFav(f=>!f)} style={{
+          display:'flex', justifyContent:'space-between', alignItems:'center',
+          padding:'11px 14px', marginBottom:8, cursor:'pointer', borderRadius:11,
+          background: filterFav ? C.orangeBg : C.card,
+          border:`1px solid ${filterFav ? C.orange+'44' : C.border}`,
+        }}>
+          <span style={{ color: filterFav ? C.orange : C.text, fontSize:14 }}>⭐ Favoris uniquement</span>
+          {filterFav && <span style={{ color:C.orange, fontSize:16 }}>✓</span>}
+        </div>
+
+        {allTags.length > 0 && (<>
+          <SecTitle>Tags</SecTitle>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
+            {allTags.map(t => (
+              <button key={t} onClick={() => setFilterTag(filterTag===t?'':t)} style={{
+                background: filterTag===t ? C.accentBg : C.border,
+                color: filterTag===t ? C.accent : C.muted,
+                border: filterTag===t ? `1px solid ${C.accent}44` : '1px solid transparent',
+                padding:'6px 14px', borderRadius:20, fontSize:12, cursor:'pointer',
+                fontWeight: filterTag===t ? 700 : 400,
+              }}>{t}</button>
+            ))}
+          </div>
+        </>)}
+
+        {activeCount > 0 && (
+          <button onClick={() => { setFilterFav(false); setFilterTag(''); }} style={{
+            width:'100%', padding:'10px', background:C.redBg, color:C.red,
+            border:`1px solid ${C.red}33`, borderRadius:10, cursor:'pointer', fontSize:13, marginBottom:8,
+          }}>✕ Effacer les filtres</button>
+        )}
+        <Btn onClick={onClose} variant="primary" style={{ width:'100%', justifyContent:'center' }}>Appliquer</Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function AssignToWeekModal({ recipe, viewPortions, onClose }) {
+  const { addMeal } = useApp();
+  const currentWeek = getISOWeekKey();
+  const [selWeek, setSelWeek]   = useState(currentWeek);
+  const [persons, setPersons]   = useState(viewPortions || recipe.portions || 4);
+  const [done,    setDone]      = useState(false);
+  const weeks = [];
+  for (let i = 0; i < 8; i++) weeks.push(shiftWeek(currentWeek, i));
+
+  const handle = () => {
+    addMeal(selWeek, recipe.id, persons);
+    setDone(true);
+    setTimeout(onClose, 900);
+  };
+
+  return (
+    <BottomSheet title={`Affecter au planning`} onClose={onClose}>
+      <div style={{ padding:16 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:14,
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:'10px 14px',
+        }}>
+          <span style={{ fontSize:22 }}>{recipe.emoji}</span>
+          <span style={{ fontWeight:600, color:C.text, fontSize:14, marginLeft:6, flex:1 }}>{recipe.name}</span>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+          <span style={{ color:C.muted, fontSize:13, flex:1 }}>👥 Personnes</span>
+          <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
+          <span style={{ fontWeight:700, color:C.text, minWidth:24, textAlign:'center' }}>{persons}</span>
+          <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
+        </div>
+        <SecTitle>Semaine</SecTitle>
+        {weeks.map(w => (
+          <div key={w} onClick={() => setSelWeek(w)} style={{
+            padding:'9px 14px', borderRadius:10, marginBottom:5, cursor:'pointer',
+            background: selWeek===w ? C.accentBg : C.bg,
+            border:`1px solid ${selWeek===w ? C.accent+'55' : C.border}`,
+          }}>
+            <span style={{ fontWeight:500, color: w===currentWeek ? C.accent : C.text, fontSize:13 }}>
+              {w===currentWeek ? '📅 ' : ''}S{w.split('-W')[1]}
+            </span>
+            <span style={{ fontSize:11, color:C.muted, marginLeft:8 }}>{getWeekRange(w)}</span>
+          </div>
+        ))}
+        {done
+          ? <div style={{ textAlign:'center', color:C.green, fontSize:14, fontWeight:600, marginTop:12 }}>✅ Ajouté !</div>
+          : <Btn onClick={handle} variant="primary" style={{ width:'100%', justifyContent:'center', marginTop:10 }}>Ajouter au planning</Btn>
+        }
+      </div>
+    </BottomSheet>
+  );
+}
+
+function RecipeCard({ recipe, onClick, onDelete }) {
+  const { meals } = useApp();
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  const mealCount = meals.filter(m => m.recipeId === recipe.id).length;
+
+  const handleDelete = e => {
+    e.stopPropagation();
+    if (confirmDel) { onDelete(); }
+    else { setConfirmDel(true); setTimeout(() => setConfirmDel(false), 2500); }
+  };
+
+  return (
+    <div onClick={onClick} style={{
+      background:C.card, border:`1px solid ${C.border}`,
+      borderRadius:11, padding:'10px 9px 9px', cursor:'pointer', transition:'all 0.12s',
+    }}>
+      <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
+        {/* Emoji */}
+        <span style={{ fontSize:28, flexShrink:0, lineHeight:'1.1' }}>{recipe.emoji}</span>
+
+        {/* Texte */}
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontWeight:600, fontSize:12, color:C.text, lineHeight:1.35, marginBottom:4 }}>
+            {recipe.name}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
+            <span style={{ fontSize:10, color:C.muted }}>
+              🍽 {recipe.portions}p{recipe.cookTimeMinutes > 0 ? ` · ⏱ ${recipe.cookTimeMinutes}m` : ''}
+            </span>
+            {mealCount > 0 && (
+              <span style={{
+                fontSize:9, fontWeight:700, color:C.accent,
+                background:C.accentBg, border:`1px solid ${C.accent}33`,
+                borderRadius:8, padding:'1px 6px', letterSpacing:'0.02em',
+              }}>
+                ×{mealCount}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Étoile favoris + suppression */}
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:4, flexShrink:0 }}>
+          {recipe.favorite
+            ? <span style={{ fontSize:12, lineHeight:1 }}>⭐</span>
+            : <span style={{ width:12 }} />
+          }
+          <button onClick={handleDelete} style={{
+            background: confirmDel ? C.redBg : 'transparent',
+            border: confirmDel ? `1px solid ${C.red}44` : 'none',
+            color: confirmDel ? C.red : C.muted,
+            borderRadius:5, padding:'1px 4px', cursor:'pointer', fontSize:11, transition:'all 0.2s',
+          }}>
+            {confirmDel ? '✓' : '🗑'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
+  const { meals, showSnack } = useApp();
+  const [checked,     setChecked]     = useState(new Set());
+  const [confirmDel,  setConfirmDel]  = useState(false);
+  const [viewPortions, setViewPortions] = useState(recipe.portions || 4);
+  const [assignOpen,  setAssignOpen]  = useState(false);
+
+  const base  = recipe.portions || 4;
+  const scale = viewPortions / base;
+
+  const timesCookedCount = meals.filter(m => m.recipeId === recipe.id && m.done).length;
+  const toggle = i => setChecked(s => { const n=new Set(s); n.has(i)?n.delete(i):n.add(i); return n; });
+
+  const fmtQty = qty => {
+    if (!qty) return 0;
+    const v = qty * scale;
+    return Math.round(v * 10) / 10;
+  };
+
+  const share = () => {
+    const text = [
+      `${recipe.emoji} ${recipe.name}`,
+      `🍽 ${viewPortions} portions${recipe.cookTimeMinutes ? ` · ⏱ ${recipe.cookTimeMinutes} min` : ''}`,
+      '', 'Ingrédients :',
+      ...(recipe.ingredients||[]).map(i => {
+        const q = fmtQty(i.qty);
+        return `• ${q?q+(i.unit?' '+i.unit:''):''} ${i.name}`.trim();
+      }),
+      '', 'Étapes :',
+      ...(recipe.steps||[]).map((s,i) => `${i+1}. ${s}`),
+      recipe.note ? `\n📝 ${recipe.note}` : '',
+      recipe.url  ? `\n🔗 ${recipe.url}`  : '',
+    ].filter(Boolean).join('\n');
+    if (navigator.share) navigator.share({ title: recipe.name, text });
+    else navigator.clipboard?.writeText(text).then(() => showSnack('Recette copiée'));
+  };
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:500, background:C.bg, overflowY:'auto', animation:'fadeIn 0.18s' }}>
+      {/* Barre sticky */}
+      <div style={{
+        background:C.card, borderBottom:`1px solid ${C.border}`,
+        padding:'9px 14px', display:'flex', justifyContent:'space-between', alignItems:'center',
+        position:'sticky', top:0, zIndex:10,
+      }}>
+        <Btn onClick={onClose} small>← Retour</Btn>
+        <div style={{ display:'flex', gap:6 }}>
+          <Btn onClick={() => setAssignOpen(true)} variant="green" small>📅 Affecter</Btn>
+          <Btn onClick={share} variant="accent" small>📤</Btn>
+          <Btn onClick={onEdit} small>✏️</Btn>
+        </div>
+      </div>
+
+      <div style={{ padding:18 }}>
+        {/* Hero */}
+        <div style={{ textAlign:'center', marginBottom:14 }}>
+          <div style={{ fontSize:52, marginBottom:6 }}>{recipe.emoji}</div>
+          <h1 style={{ fontSize:19, fontWeight:800, color:C.text, marginBottom:6 }}>{recipe.name}</h1>
+          <Stars value={recipe.rating} />
+        </div>
+
+        {/* Chips */}
+        <div style={{ display:'flex', flexWrap:'wrap', gap:7, marginBottom:14, justifyContent:'center' }}>
+          {recipe.cookTimeMinutes > 0 && <Chip>⏱ {recipe.cookTimeMinutes} min</Chip>}
+          {timesCookedCount > 0 && <Chip color={C.green}>✅ Cuisiné {timesCookedCount}×</Chip>}
+          {recipe.favorite && <Chip color={C.orange}>⭐ Favori</Chip>}
+        </div>
+
+        {/* Tags */}
+        {(recipe.tags||[]).length > 0 && (
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+            {recipe.tags.map(t => (
+              <span key={t} style={{ background:C.accentBg, color:C.accent, fontSize:11, padding:'3px 10px', borderRadius:20 }}>{t}</span>
+            ))}
+          </div>
+        )}
+
+        {/* Ajusteur de portions */}
+        <div style={{
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:11,
+          padding:'10px 14px', marginBottom:4,
+        }}>
+          <div>
+            <span style={{ color:C.text, fontSize:13, fontWeight:500 }}>🍽 Portions</span>
+            {scale !== 1 && (
+              <span style={{ fontSize:11, color:C.accent, marginLeft:7, fontWeight:600 }}>
+                ×{Math.round(scale*10)/10}
+              </span>
+            )}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <button onClick={() => setViewPortions(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:16 }}>−</button>
+            <span style={{ fontWeight:700, color:C.text, minWidth:26, textAlign:'center', fontSize:14 }}>{viewPortions}</span>
+            <button onClick={() => setViewPortions(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:16 }}>+</button>
+            {viewPortions !== base && (
+              <button onClick={() => setViewPortions(base)} title="Réinitialiser" style={{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:13, paddingLeft:4 }}>↺</button>
+            )}
+          </div>
+        </div>
+
+        {/* Ingrédients (recalculés) */}
+        <SecTitle>Ingrédients</SecTitle>
+        {(recipe.ingredients||[]).map(ing => {
+          const q = fmtQty(ing.qty);
+          return (
+            <div key={ing.id} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${C.border}` }}>
+              <span style={{ color:C.text, fontSize:13 }}>{ing.name}</span>
+              {q > 0 && (
+                <span style={{
+                  fontSize:13, fontWeight: scale!==1 ? 600 : 400,
+                  color: scale!==1 ? C.accent : C.muted,
+                }}>
+                  {q}{ing.unit ? ' '+ing.unit : ''}
+                </span>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Étapes */}
+        <SecTitle>Préparation</SecTitle>
+        {(recipe.steps||[]).map((step, i) => (
+          <div key={i} onClick={() => toggle(i)} style={{
+            display:'flex', gap:10, padding:'9px 0', borderBottom:`1px solid ${C.border}`, cursor:'pointer',
+          }}>
+            <div style={{
+              width:22, height:22, borderRadius:'50%', flexShrink:0,
+              background: checked.has(i) ? C.green : C.border,
+              color:'#fff', display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:11, fontWeight:700, transition:'all 0.2s',
+            }}>
+              {checked.has(i) ? '✓' : i+1}
+            </div>
+            <span style={{
+              color: checked.has(i) ? C.muted : C.text,
+              textDecoration: checked.has(i) ? 'line-through' : 'none',
+              fontSize:13, lineHeight:1.6, flex:1,
+            }}>{step}</span>
+          </div>
+        ))}
+
+        {recipe.note && (<>
+          <SecTitle>Note</SecTitle>
+          <p style={{ color:C.soft, fontSize:13, lineHeight:1.7, background:C.card, borderRadius:11, padding:12, border:`1px solid ${C.border}` }}>{recipe.note}</p>
+        </>)}
+
+        {recipe.url && (
+          <div style={{ marginTop:14 }}>
+            <a href={recipe.url} target="_blank" rel="noopener noreferrer" style={{ color:C.accent, fontSize:12 }}>🔗 {recipe.url}</a>
+          </div>
+        )}
+
+        <div style={{ marginTop:20, paddingTop:14, borderTop:`1px solid ${C.border}` }}>
+          <Btn onClick={() => { if(confirmDel) onDelete(); else { setConfirmDel(true); setTimeout(()=>setConfirmDel(false),3000); } }}
+            variant="danger" small>
+            {confirmDel ? '⚠️ Confirmer' : '🗑 Supprimer la recette'}
+          </Btn>
+        </div>
+      </div>
+
+      {assignOpen && (
+        <AssignToWeekModal recipe={recipe} viewPortions={viewPortions} onClose={() => setAssignOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+function Chip({ children, color }) {
+  return (
+    <span style={{ background:C.border, color:color||C.muted, fontSize:12, padding:'4px 12px', borderRadius:20, fontWeight:500 }}>
+      {children}
+    </span>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  INGREDIENT PARSER  (fractions → regex → unité longest-first)
+// ══════════════════════════════════════════════════════
+const FRAC_MAP = {
+  '½':0.5,'¼':0.25,'¾':0.75,'⅓':1/3,'⅔':2/3,
+  '⅛':0.125,'⅜':0.375,'⅝':0.625,'⅞':0.875,
+};
+const UNIT_NORM = {
+  'càs':'cs','c.à.s.':'cs','cuillère à soupe':'cs','cuillères à soupe':'cs','cuillere a soupe':'cs','cuilleres a soupe':'cs',
+  'càc':'cc','c.à.c.':'cc','cuillère à café':'cc','cuillères à café':'cc','cuillere a cafe':'cc','cuilleres a cafe':'cc',
+  'gramme':'g','grammes':'g','kilogramme':'kg','kilogrammes':'kg',
+  'millilitre':'ml','millilitres':'ml','centilitre':'cl','centilitres':'cl',
+  'litre':'L','litres':'L','liter':'L','liters':'L',
+  'sachet':'sachet','sachets':'sachet','bouquet':'bouquet','bouquets':'bouquet',
+  'gousse':'gousse','gousses':'gousse','tranche':'tranche','tranches':'tranche',
+  'boîte':'boîte','boîtes':'boîte','boite':'boîte','boites':'boîte',
+  'tasse':'tasse','tasses':'tasse',
+  'pincée':'pincée','pincées':'pincée','pincee':'pincée','pincees':'pincée',
+};
+// Ordonnés du plus long au plus court pour éviter "g" avant "gousses"
+const UNIT_LIST = [
+  'cuillères à soupe','cuillère à soupe','cuilleres a soupe','cuillere a soupe',
+  'cuillères à café','cuillère à café','cuilleres a cafe','cuillere a cafe',
+  'c.à.s.','c.à.c.','càs','càc',
+  'kilogrammes','kilogramme','millilitres','millilitre','centilitres','centilitre','litres','litre','liters','liter',
+  'grammes','gramme',
+  'sachets','sachet','bouquets','bouquet','gousses','gousse','tranches','tranche',
+  'boîtes','boîte','boites','boite','tasses','tasse',
+  'pincées','pincée','pincees','pincee',
+  'kg','ml','cl','cs','cc','g','L','l',
+];
+
+function parseIngredient(raw) {
+  if (!raw?.trim()) return null;
+  let s = raw.trim();
+  for (const [f, v] of Object.entries(FRAC_MAP))
+    s = s.replace(new RegExp(f, 'g'), v + ' ');
+  s = s.replace(/\b(\d+)\/(\d+)\b/g, (_, n, d) => String(parseFloat(n) / parseFloat(d)));
+  s = s.replace(/\b(\d+)\s+(0\.\d+)\b/g, (_, w, f) => String(parseFloat(w) + parseFloat(f)));
+  const numM = s.match(/^([\d.,]+)\s*/);
+  let qty = 0, rest = s;
+  if (numM) { qty = parseFloat(numM[1].replace(',', '.')) || 0; rest = s.slice(numM[0].length); }
+  let unit = '', name = rest;
+  for (const u of UNIT_LIST) {
+    const esc = u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^(?:${esc})s?\\s+(?:(?:de|d')\\s*)?`, 'i');
+    const m = rest.match(re);
+    if (m) { unit = UNIT_NORM[u.toLowerCase()] ?? u; name = rest.slice(m[0].length).trim(); break; }
+  }
+  name = name.replace(/^(?:de la|de l'|des|du|de|d')\s+/i, '').trim();
+  if (!name) name = raw.trim();
+  return { id: genId(), name, qty, unit };
+}
+
+// ══════════════════════════════════════════════════════
+//  EMOJI GUESSER  (mots-clés sur le nom du plat)
+// ══════════════════════════════════════════════════════
+const EMOJI_RULES = [
+  { kw:['poulet','volaille','dinde','pintade'],                                    e:'🍗' },
+  { kw:['bœuf','boeuf','steak','entrecôte','veau','viande hachée'],                e:'🥩' },
+  { kw:['porc','lardons','jambon','cochon','saucisse','chorizo'],                  e:'🥓' },
+  { kw:['saumon','thon','cabillaud','daurade','truite','poisson','sole'],           e:'🐟' },
+  { kw:['crevette','homard','crabe','moule','fruits de mer','langoustine'],        e:'🦐' },
+  { kw:['pâtes','spaghetti','tagliatelle','carbonara','bolognaise','lasagne','rigatoni','linguine'], e:'🍝' },
+  { kw:['riz','risotto','paella'],                                                 e:'🍚' },
+  { kw:['soupe','velouté','potage','bouillon','gazpacho','bisque'],                e:'🥣' },
+  { kw:['salade','taboulé'],                                                       e:'🥗' },
+  { kw:['pizza'],                                                                  e:'🍕' },
+  { kw:['burger','sandwich','croque'],                                             e:'🍔' },
+  { kw:['tarte','quiche','flamiche'],                                              e:'🥧' },
+  { kw:['gâteau','gateau','cake','fondant','moelleux','brownie'],                  e:'🎂' },
+  { kw:['crêpe','crepe','gaufre'],                                                 e:'🥞' },
+  { kw:['cookie','biscuit','sablé'],                                               e:'🍪' },
+  { kw:['chocolat','truffes'],                                                     e:'🍫' },
+  { kw:['glace','sorbet'],                                                         e:'🍦' },
+  { kw:['gratin','soufflé','souffle'],                                             e:'🫕' },
+  { kw:['omelette','frittata'],                                                    e:'🍳' },
+  { kw:['œuf','oeuf','cocotte'],                                                   e:'🥚' },
+  { kw:['curry','wok','thaï','thai','japonais','chinois','nems','sushi'],          e:'🍛' },
+  { kw:['tacos','burrito','fajita','mexicain'],                                    e:'🌮' },
+  { kw:['couscous','tajine'],                                                      e:'🫕' },
+  { kw:['pomme de terre','patate','purée','puree','dauphinois'],                   e:'🥔' },
+  { kw:['pain','brioche','baguette','focaccia'],                                   e:'🥖' },
+  { kw:['tiramisu','panna cotta','crème brûlée'],                                 e:'🍮' },
+  { kw:['crumble','compote'],                                                      e:'🍏' },
+];
+function guessEmoji(name) {
+  const low = (name||'').toLowerCase();
+  for (const { kw, e } of EMOJI_RULES) if (kw.some(k => low.includes(k))) return e;
+  return '🍽️';
+}
+
+// ══════════════════════════════════════════════════════
+//  TEXT PARSER  (fallback copier-coller)
+// ══════════════════════════════════════════════════════
+function parseTextRecipe(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  let name = '', ingredients = [], steps = [], section = null;
+  for (const line of lines) {
+    if (!name && !/^[-•*\d]/.test(line) && line.length > 2 && line.length < 100) { name = line; continue; }
+    if (/^ingr[eé]dients?\s*:?$/i.test(line))                                     { section = 'ing';  continue; }
+    if (/^(pr[eé]paration|[eé]tapes?|instructions?)\s*:?$/i.test(line))           { section = 'step'; continue; }
+    if (section === 'ing') {
+      const p = parseIngredient(line.replace(/^[-•*·]\s*/, ''));
+      if (p?.name) ingredients.push(p);
+    } else if (section === 'step') {
+      const s = line.replace(/^\d+[\.\)]\s*/, '').trim();
+      if (s) steps.push(s);
+    }
+  }
+  return { name, servings: 4, cookTimeMinutes: 0, tags: [], ingredients, steps, note: '' };
+}
+
+function RecipeEditor({ recipe, onClose, onSave }) {
+  const [form, setForm] = useState({
+    ...recipe,
+    tagsStr: (recipe.tags||[]).join(', '),
+    ingredients: recipe.ingredients?.length ? recipe.ingredients.map(i=>({...i})) : [{ id:genId(), name:'', qty:'', unit:'' }],
+    steps: recipe.steps?.length ? [...recipe.steps] : [''],
+  });
+
+  // ── Import state ──────────────────────────────────
+  const [importUrl,   setImportUrl]   = useState(recipe.url || '');
+  const [importing,   setImporting]   = useState(false);
+  const [importDone,  setImportDone]  = useState(false);
+  const [importError, setImportError] = useState('');
+  const [importMode,  setImportMode]  = useState('url');   // 'url' | 'paste'
+  const [pasteText,   setPasteText]   = useState('');
+  const [importStep,  setImportStep]  = useState('');
+
+  // ── Étape 1 : Jow (API officielle) ────────────────
+  const fetchJow = async (url) => {
+    const m = url.match(/\/recipes\/[^/?#]+-([A-Za-z0-9]{4,})/);
+    if (!m) throw new Error("ID Jow introuvable dans l'URL");
+    setImportStep('📡 Appel API Jow…');
+    const res = await fetch(`https://api.jow.fr/public/recipe/${m[1]}`);
+    if (!res.ok) throw new Error(`API Jow inaccessible (${res.status})`);
+    const d = await res.json();
+    return {
+      name: d.title || d.name || '',
+      cookTimeMinutes: Math.round((d.cookingTime || d.totalTime || 0) / 60),
+      servings: d.serves || d.servings || 4,
+      ingredients: (d.constituents || d.ingredients || []).map(i => {
+        const qty  = i.quantity || 0;
+        const unit = (i.quantityUnit && i.quantityUnit !== 'unit') ? i.quantityUnit : '';
+        const n    = i.ingredient?.name || i.name || '';
+        return `${qty} ${unit} ${n}`.trim();
+      }),
+      steps: (d.steps || []).map(s => s.description || s.label || String(s)).filter(Boolean),
+      tags:  (d.tags  || []).map(t => t.name || t).filter(Boolean),
+    };
+  };
+
+  // ── Étapes 2-4 : JSON-LD → __NEXT_DATA__ → Microdata → texte (via Claude) ──
+  const fetchViaClaude = async (url) => {
+    setImportStep('🔍 Téléchargement et analyse de la page…');
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 3000,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        system: `Tu es un parseur de recettes de cuisine. Accède à l'URL fournie et extrais la recette.
+
+Stratégie d'extraction par ordre de priorité :
+1. JSON-LD : cherche <script type="application/ld+json"> contenant "@type":"Recipe" — recherche récursive dans @graph, tableaux, jusqu'à 10 niveaux de profondeur.
+2. __NEXT_DATA__ : si le site est Next.js, cherche <script id="__NEXT_DATA__"> et fouille récursivement (12 niveaux) soit "@type":"Recipe", soit heuristiquement un objet avec "name" + "recipeIngredient".
+3. Microdata : cherche itemtype contenant "Recipe", puis itemprop="recipeIngredient" et itemprop="recipeInstructions".
+4. Texte brut : cherche les sections "Ingrédients" et "Préparation" dans le texte de la page.
+
+Réponds UNIQUEMENT avec un objet JSON valide. Pas de markdown, pas de backticks, aucun texte avant ou après.
+Format exact :
+{"name":"Nom exact du plat","servings":4,"cookTimeMinutes":30,"tags":["tag1","tag2"],"ingredients":["200 g de farine","3 œufs","1 pincée de sel"],"steps":["Étape 1 complète","Étape 2 complète"],"note":""}
+
+RÈGLES IMPORTANTES :
+- ingredients : tableau de CHAÎNES BRUTES exactement comme sur le site (ex: "200 g de farine tamisée") — NE PAS parser, NE PAS modifier
+- servings : nombre de portions ORIGINAL du site (pas 6, pas normalisé)
+- steps : toutes les étapes, complètes et détaillées
+- tags : 2-4 mots-clés en français décrivant le plat`,
+        messages: [{ role: 'user', content: `Accède à cette URL et extrais la recette au format JSON : ${url}` }],
+      }),
+    });
+    setImportStep('⚙️ Extraction des données structurées…');
+    const data = await res.json();
+    const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
+    const raw   = texts[texts.length - 1] || '';
+    const json  = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const rec   = JSON.parse(json);
+    // Normalise ingredients en strings si Claude a retourné des objets
+    rec.ingredients = (rec.ingredients || []).map(i =>
+      typeof i === 'string' ? i : [i.qty||'', i.unit||'', i.name||''].filter(Boolean).join(' ')
+    );
+    return rec;
+  };
+
+  // ── Mise à l'échelle → 6 personnes + IngredientParser ──
+  const applyScale = (raw) => {
+    const src   = raw.servings || raw.portions || 4;
+    const scale = 6 / src;
+    const ingredients = (raw.ingredients || [])
+      .map(i => typeof i === 'string' ? parseIngredient(i) : i)
+      .filter(Boolean)
+      .map(i => ({ ...i, qty: i.qty ? Math.round(i.qty * scale * 10) / 10 : 0 }));
+    return { ...raw, ingredients };
+  };
+
+  // ── Handler principal ──────────────────────────────
+  const handleImport = async () => {
+    setImporting(true); setImportError(''); setImportDone(false); setImportStep('');
+    try {
+      let raw = null;
+
+      if (importMode === 'paste') {
+        if (!pasteText.trim()) { setImportError('Colle du texte dans la zone.'); return; }
+        raw = parseTextRecipe(pasteText);
+        if (!raw.name && !raw.ingredients.length)
+          throw new Error('Sections "Ingrédients" et "Préparation" introuvables dans le texte.');
+      } else {
+        const url = importUrl.trim();
+        if (!url) return;
+        if (url.includes('jow.fr')) {
+          try   { raw = await fetchJow(url); }
+          catch (e) {
+            setImportStep('↩ API Jow inaccessible, bascule sur Claude…');
+            raw = await fetchViaClaude(url);
+          }
+        } else {
+          raw = await fetchViaClaude(url);
+        }
+      }
+
+      const scaled = applyScale(raw);
+      setForm(f => ({
+        ...f,
+        name:            scaled.name || f.name,
+        emoji:           guessEmoji(scaled.name || f.name),
+        portions:        6,
+        cookTimeMinutes: scaled.cookTimeMinutes || 0,
+        tagsStr:         (scaled.tags || []).join(', '),
+        ingredients:     scaled.ingredients.length ? scaled.ingredients : f.ingredients,
+        steps:           (scaled.steps || []).filter(s => s?.trim()),
+        note:            scaled.note || '',
+        url:             importMode === 'url' ? importUrl.trim() : f.url,
+      }));
+      setImportDone(true);
+      setImportStep('');
+    } catch (e) {
+      console.error(e);
+      const isBadJson = e.message?.includes('JSON') || e.message?.includes('parse') || e instanceof SyntaxError;
+      setImportError(isBadJson
+        ? 'Données structurées introuvables sur cette page. Essaie le mode "Coller le texte".'
+        : (e.message || "Impossible d'extraire la recette."));
+      setImportStep('');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const addIng  = () => set('ingredients', [...form.ingredients, { id:genId(), name:'', qty:'', unit:'' }]);
+  const remIng  = id => set('ingredients', form.ingredients.filter(i => i.id !== id));
+  const updIng  = (id,k,v) => set('ingredients', form.ingredients.map(i => i.id===id?{...i,[k]:v}:i));
+  const addStep = () => set('steps', [...form.steps, '']);
+  const remStep = i => set('steps', form.steps.filter((_,j) => j !== i));
+  const updStep = (i,v) => set('steps', form.steps.map((s,j) => j===i?v:s));
+
+  const handleSave = () => {
+    if (!form.name.trim()) return;
+    onSave({
+      ...form,
+      tags: form.tagsStr.split(',').map(t=>t.trim()).filter(Boolean),
+      ingredients: form.ingredients.filter(i=>i.name.trim()),
+      steps: form.steps.filter(s=>s.trim()),
+      portions: parseInt(form.portions)||6,
+      cookTimeMinutes: parseInt(form.cookTimeMinutes)||0,
+    });
+  };
+
+  const inp = { padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:14, outline:'none', width:'100%' };
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:600, background:C.bg, overflowY:'auto', animation:'fadeIn 0.18s' }}>
+      <div style={{
+        background:C.card, borderBottom:`1px solid ${C.border}`,
+        padding:'10px 16px', display:'flex', justifyContent:'space-between', alignItems:'center',
+        position:'sticky', top:0, zIndex:10,
+      }}>
+        <Btn onClick={onClose} small>Annuler</Btn>
+        <span style={{ fontWeight:700, color:C.text }}>{form.id ? 'Modifier la recette' : 'Nouvelle recette'}</span>
+        <Btn onClick={handleSave} variant="primary" small disabled={!form.name.trim()}>Enregistrer</Btn>
+      </div>
+
+      <div style={{ padding:20 }}>
+
+        {/* ══ Bloc import (nouvelles recettes uniquement) ══ */}
+        {!form.id && (
+          <div style={{
+            background: importDone ? C.greenBg : C.planBg,
+            border: `1px solid ${importDone ? C.green+'55' : C.planBdr}`,
+            borderRadius:14, padding:14, marginBottom:20, transition:'all 0.3s',
+          }}>
+            {/* Titre + toggle URL / Texte */}
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+              <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em' }}>
+                🔗 Importer une recette
+              </div>
+              <div style={{ display:'flex', background:C.border, borderRadius:8, padding:2, gap:2 }}>
+                {[['url','🔗 URL'],['paste','📋 Texte']].map(([m, label]) => (
+                  <button key={m} onClick={() => { setImportMode(m); setImportError(''); setImportDone(false); }} style={{
+                    background: importMode===m ? C.accent : 'transparent',
+                    color: importMode===m ? '#fff' : C.muted,
+                    border:'none', borderRadius:6, padding:'4px 10px', fontSize:11, cursor:'pointer', fontWeight:600,
+                  }}>{label}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Mode URL */}
+            {importMode === 'url' && (<>
+              <div style={{ fontSize:11, color:C.muted, marginBottom:8 }}>
+                Marmiton · 750g · CuisineAZ · Jow · Cuisine JDF · BBC Good Food · AllRecipes…
+              </div>
+              <div style={{ display:'flex', gap:8 }}>
+                <input value={importUrl}
+                  onChange={e => { setImportUrl(e.target.value); setImportDone(false); setImportError(''); }}
+                  onKeyDown={e => e.key==='Enter' && handleImport()}
+                  placeholder="https://www.marmiton.org/recettes/..."
+                  style={{ ...inp, flex:1 }} disabled={importing}
+                />
+                <Btn onClick={handleImport} variant="primary" small disabled={importing || !importUrl.trim()}>
+                  {importing ? '⏳' : '⬇ Importer'}
+                </Btn>
+              </div>
+            </>)}
+
+            {/* Mode Coller */}
+            {importMode === 'paste' && (<>
+              <div style={{ fontSize:11, color:C.muted, marginBottom:8 }}>
+                Colle le texte de la page (titre, section Ingrédients, section Préparation)
+              </div>
+              <textarea value={pasteText} onChange={e => setPasteText(e.target.value)}
+                placeholder={"Bœuf bourguignon\n\nIngrédients\n- 800 g de bœuf\n- 2 oignons\n\nPréparation\n1. Couper le bœuf en cubes..."}
+                rows={7} style={{ ...inp, resize:'vertical', marginBottom:8, fontFamily:'monospace', fontSize:12 }}
+              />
+              <Btn onClick={handleImport} variant="primary" small disabled={importing || !pasteText.trim()}>
+                {importing ? '⏳ Analyse…' : '⚙️ Analyser le texte'}
+              </Btn>
+            </>)}
+
+            {/* Étape en cours */}
+            {importing && importStep && (
+              <div style={{ marginTop:10, display:'flex', alignItems:'center', gap:8, color:C.accent, fontSize:12 }}>
+                <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>⚙️</span>
+                {importStep}
+              </div>
+            )}
+            {/* Succès */}
+            {importDone && !importing && (
+              <div style={{ marginTop:10, color:C.green, fontSize:13, fontWeight:500 }}>
+                ✅ Recette importée pour 6 personnes — vérifiez et ajustez si besoin
+              </div>
+            )}
+            {/* Erreur + bouton bascule */}
+            {importError && !importing && (
+              <div style={{ marginTop:10 }}>
+                <div style={{ color:C.red, fontSize:12, lineHeight:1.6 }}>⚠️ {importError}</div>
+                {importMode === 'url' && (
+                  <button onClick={() => setImportMode('paste')} style={{
+                    marginTop:6, background:'none', border:`1px solid ${C.red}44`,
+                    color:C.red, borderRadius:8, padding:'4px 12px', cursor:'pointer', fontSize:11,
+                  }}>
+                    Essayer en collant le texte manuellement →
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══ Emoji & Nom ══ */}
+        <div style={{ display:'flex', gap:14, alignItems:'flex-start', marginBottom:18 }}>
+          <EmojiPicker value={form.emoji} onChange={v => set('emoji', v)} />
+          <div style={{ flex:1 }}>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom *</label>
+            <input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Nom de la recette" style={inp} />
+          </div>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:16 }}>
+          <div>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🍽 Portions</label>
+            <input type="number" min="1" value={form.portions} onChange={e=>set('portions',e.target.value)} style={inp} />
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>⏱ Durée (min)</label>
+            <input type="number" min="0" value={form.cookTimeMinutes} onChange={e=>set('cookTimeMinutes',e.target.value)} style={inp} />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🏷 Tags (séparés par virgule)</label>
+          <input value={form.tagsStr} onChange={e=>set('tagsStr',e.target.value)} placeholder="volaille, rapide, four..." style={inp} />
+        </div>
+
+        <div style={{ display:'flex', gap:20, alignItems:'center', marginBottom:18 }}>
+          <div>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Note</label>
+            <Stars value={form.rating} onChange={v=>set('rating',v)} />
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Favori</label>
+            <button onClick={() => set('favorite',!form.favorite)} style={{
+              background: form.favorite ? C.orangeBg : C.border,
+              color: form.favorite ? C.orange : C.muted,
+              border: form.favorite ? `1px solid ${C.orange}44` : 'none',
+              padding:'6px 12px', borderRadius:9, cursor:'pointer', fontSize:13,
+            }}>
+              {form.favorite ? '⭐ Favori' : '☆ Favori'}
+            </button>
+          </div>
+        </div>
+
+        <SecTitle>Ingrédients</SecTitle>
+        {form.ingredients.map(ing => (
+          <div key={ing.id} style={{ display:'flex', gap:6, marginBottom:7, alignItems:'center' }}>
+            <input value={ing.name} onChange={e=>updIng(ing.id,'name',e.target.value)} placeholder="Nom" style={{ ...inp, flex:3 }} />
+            <input type="number" value={ing.qty} onChange={e=>updIng(ing.id,'qty',e.target.value)} placeholder="Qté" style={{ ...inp, flex:1 }} />
+            <select value={ing.unit} onChange={e=>updIng(ing.id,'unit',e.target.value)} style={{ ...inp, flex:1 }}>
+              {UNITS.map(u => <option key={u} value={u}>{u||'—'}</option>)}
+            </select>
+            <button onClick={()=>remIng(ing.id)} style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:18, padding:'0 4px' }}>×</button>
+          </div>
+        ))}
+        <Btn onClick={addIng} variant="ghost" small style={{ marginBottom:20 }}>+ Ingrédient</Btn>
+
+        <SecTitle>Étapes</SecTitle>
+        {form.steps.map((step, i) => (
+          <div key={i} style={{ display:'flex', gap:8, marginBottom:8, alignItems:'flex-start' }}>
+            <span style={{ color:C.muted, fontWeight:700, fontSize:13, paddingTop:9, minWidth:18 }}>{i+1}.</span>
+            <textarea value={step} onChange={e=>updStep(i,e.target.value)} placeholder={`Étape ${i+1}...`} rows={2}
+              style={{ ...inp, resize:'vertical', flex:1 }} />
+            <button onClick={()=>remStep(i)} style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:18, paddingTop:6 }}>×</button>
+          </div>
+        ))}
+        <Btn onClick={addStep} variant="ghost" small style={{ marginBottom:20 }}>+ Étape</Btn>
+
+        <div style={{ marginBottom:18 }}>
+          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>📝 Note personnelle</label>
+          <textarea value={form.note} onChange={e=>set('note',e.target.value)} placeholder="Conseils, variantes..." rows={3} style={{ ...inp }} />
+        </div>
+        <div style={{ marginBottom:20 }}>
+          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🔗 Source (URL)</label>
+          <input value={form.url} onChange={e=>set('url',e.target.value)} placeholder="https://..." style={inp} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  COURSES TAB
+// ══════════════════════════════════════════════════════
+function ShoppingTab() {
+  const { shopping, cats, addShoppingItem, clearChecked, clearAll, showSnack, reorderCats } = useApp();
+  const [newName,  setNewName]  = useState('');
+  const [newQty,   setNewQty]   = useState('');
+  const [newUnit,  setNewUnit]  = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dragOverCat,  setDragOverCat]  = useState(null);
+  const [dragLineCat,  setDragLineCat]  = useState(null); // 'before'|'after' relative to dragOverCat
+  const dragRef    = useRef({ type: null, id: null, catId: null });
+  const scrollRef  = useRef(null); // auto-scroll interval
+
+  const sortedCats  = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
+  const checkedCount = shopping.filter(s=>s.checked).length;
+
+  // ── Auto-scroll ──────────────────────────────────────
+  const startScroll = (container, speed) => {
+    stopScroll();
+    scrollRef.current = setInterval(() => { container.scrollTop += speed; }, 14);
+  };
+  const stopScroll = () => {
+    clearInterval(scrollRef.current); scrollRef.current = null;
+  };
+  const checkAutoScroll = (e) => {
+    const main = e.currentTarget?.closest?.('main') || document.querySelector('main');
+    if (!main) return;
+    const r = main.getBoundingClientRect(), zone = 70;
+    if (e.clientY - r.top < zone)    startScroll(main, -7);
+    else if (r.bottom - e.clientY < zone) startScroll(main,  7);
+    else stopScroll();
+  };
+
+  // ── DnD catégories ──────────────────────────────────
+  const onCatDragStart = (e, catId) => {
+    if (dragRef.current.type === 'item') return; // item drag en cours
+    dragRef.current = { type:'cat', id:catId, catId:null };
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  const onCatDragOver = (e, catId) => {
+    e.preventDefault();
+    if (dragRef.current.type !== 'cat' || dragRef.current.id === catId) return;
+    checkAutoScroll(e);
+    // Avant ou après la cible selon la position Y de la souris
+    const rect = e.currentTarget.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    setDragOverCat(catId);
+    setDragLineCat(after ? 'after' : 'before');
+  };
+  const onCatDrop = (e, targetId) => {
+    e.preventDefault();
+    stopScroll();
+    if (dragRef.current.type !== 'cat') return;
+    const fromId = dragRef.current.id;
+    dragRef.current = { type:null, id:null, catId:null };
+    setDragOverCat(null); setDragLineCat(null);
+    if (fromId === targetId) return;
+
+    const ids = sortedCats.map(c => c.id);
+    const fromIdx = ids.indexOf(fromId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const insertAfter = e.clientY > rect.top + rect.height / 2;
+
+    // Recalcule la position sans le fromId
+    const without = ids.filter(id => id !== fromId);
+    let toIdx = without.indexOf(targetId);
+    if (insertAfter) toIdx += 1;
+    without.splice(toIdx, 0, fromId);
+
+    reorderCats(without.map(id => cats.find(c => c.id === id)).filter(Boolean));
+  };
+  const onCatDragEnd = () => {
+    stopScroll();
+    setDragOverCat(null); setDragLineCat(null);
+    dragRef.current = { type:null, id:null, catId:null };
+  };
+
+  const handleAdd = () => {
+    if (!newName.trim()) return;
+    addShoppingItem(newName.trim(), newQty, newUnit);
+    setNewName(''); setNewQty(''); setNewUnit('');
+  };
+
+  const shareList = () => {
+    const text = sortedCats.map(cat => {
+      const items = shopping.filter(s => s.categoryId===cat.id);
+      if (!items.length) return '';
+      return `${cat.emoji} ${cat.name}\n${items.map(i => `  · ${i.name}${i.qty?` – ${i.qty}${i.unit?' '+i.unit:''}`:''}${i.fromRecipeId?' 📅':''}`).join('\n')}`;
+    }).filter(Boolean).join('\n\n');
+    if (navigator.share) navigator.share({ title:'Liste de courses', text });
+    else navigator.clipboard?.writeText(text).then(() => showSnack('Liste copiée'));
+  };
+
+  return (
+    <div style={{ padding:'10px 12px' }}>
+
+      {/* ── Ajout rapide (toujours en haut, compact) ── */}
+      <div style={{
+        display:'flex', gap:5, marginBottom:10, alignItems:'center',
+        background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:'7px 9px',
+      }}>
+        <input value={newName} onChange={e=>setNewName(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&handleAdd()}
+          placeholder="Ajouter un article..."
+          style={{ flex:1, minWidth:0, padding:'5px 8px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:7, color:C.text, fontSize:13, outline:'none' }}
+        />
+        <input type="number" value={newQty} onChange={e=>setNewQty(e.target.value)} placeholder="Qté"
+          style={{ width:36, flexShrink:0, padding:'5px 4px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:7, color:C.text, fontSize:12, outline:'none' }}
+        />
+        <select value={newUnit} onChange={e=>setNewUnit(e.target.value)}
+          style={{ width:44, flexShrink:0, padding:'5px 2px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:7, color:C.text, fontSize:11, outline:'none' }}>
+          {UNITS.map(u => <option key={u} value={u}>{u||'—'}</option>)}
+        </select>
+        <button onClick={handleAdd} style={{
+          background:C.accentDk, color:'#fff', border:'none', borderRadius:7,
+          width:28, height:28, fontSize:18, cursor:'pointer', flexShrink:0,
+          display:'flex', alignItems:'center', justifyContent:'center',
+        }}>+</button>
+      </div>
+
+      {/* ── Barre articles + actions ── */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <span style={{ fontSize:11, color:C.muted }}>
+          {shopping.length} article{shopping.length!==1?'s':''}
+          {checkedCount > 0 && <span style={{ color:C.green }}> · {checkedCount} coché{checkedCount>1?'s':''}</span>}
+        </span>
+        <div style={{ display:'flex', gap:5, position:'relative' }}>
+          <Btn onClick={shareList} small variant="ghost">📤</Btn>
+          <div style={{ position:'relative' }}>
+            <Btn onClick={() => setMenuOpen(m=>!m)} small variant="ghost">⋯</Btn>
+            {menuOpen && (
+              <div style={{
+                position:'absolute', right:0, top:'110%', background:C.card,
+                border:`1px solid ${C.border}`, borderRadius:12, overflow:'hidden',
+                minWidth:190, zIndex:200, boxShadow:'0 12px 32px rgba(0,0,0,0.5)',
+                animation:'fadeIn 0.12s',
+              }}>
+                {checkedCount > 0 && (
+                  <button onClick={() => { clearChecked(); setMenuOpen(false); }} style={{
+                    display:'block', width:'100%', padding:'10px 14px', background:'none',
+                    color:C.text, border:'none', textAlign:'left', cursor:'pointer', fontSize:13,
+                    borderBottom:`1px solid ${C.border}`,
+                  }}>✅ Vider les cochés ({checkedCount})</button>
+                )}
+                <button onClick={() => { clearAll(); setMenuOpen(false); }} style={{
+                  display:'block', width:'100%', padding:'10px 14px', background:'none',
+                  color:C.red, border:'none', textAlign:'left', cursor:'pointer', fontSize:13,
+                }}>🗑 Tout vider</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {shopping.length === 0 && <EmptyState icon="🛒" text="La liste est vide" />}
+
+      {/* ── Catégories draggables ── */}
+      {sortedCats.map(cat => {
+        const items = shopping.filter(s => s.categoryId===cat.id);
+        if (!items.length) return null;
+        const over  = dragOverCat === cat.id;
+        const line  = over ? dragLineCat : null;
+        return (
+          <CategorySection
+            key={cat.id} cat={cat} items={items}
+            isDragOver={over} dragLine={line}
+            onCatDragStart={e => onCatDragStart(e, cat.id)}
+            onCatDragOver={e => onCatDragOver(e, cat.id)}
+            onCatDrop={e => onCatDrop(e, cat.id)}
+            onCatDragEnd={onCatDragEnd}
+            dragRef={dragRef}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onCatDragOver, onCatDrop, onCatDragEnd, dragRef }) {
+  const { reorderItemsInCat } = useApp();
+  const [open, setOpen] = useState(true);
+  const [dragOverItem, setDragOverItem] = useState(null);
+
+  const sorted   = [...items].sort((a,b) => (a.sortOrder??0) - (b.sortOrder??0));
+  const allItems = [...sorted.filter(i=>!i.checked), ...sorted.filter(i=>i.checked)];
+
+  // ── DnD articles (isolation stricte) ──────────────
+  const onItemDragStart = (e, itemId) => {
+    dragRef.current = { type:'item', id:itemId, catId:cat.id };
+    e.dataTransfer.effectAllowed = 'move';
+    e.stopPropagation(); // empêche le cat dragStart de se déclencher
+  };
+  const onItemDragOver = (e, itemId) => {
+    if (dragRef.current.type !== 'item') return; // laisser passer le cat drag
+    e.preventDefault(); e.stopPropagation();
+    if (dragRef.current.catId === cat.id && dragRef.current.id !== itemId)
+      setDragOverItem(itemId);
+  };
+  const onItemDrop = (e, targetId) => {
+    if (dragRef.current.type !== 'item') return; // laisser le cat drop gérer
+    e.preventDefault(); e.stopPropagation();
+    if (dragRef.current.catId !== cat.id) return;
+    const fromId = dragRef.current.id;
+    dragRef.current = { type:null, id:null, catId:null };
+    setDragOverItem(null);
+    if (fromId === targetId) return;
+
+    const ids = allItems.map(i => i.id);
+    const fromIdx = ids.indexOf(fromId);
+    // Insérer avant ou après selon Y
+    const rect = e.currentTarget.getBoundingClientRect();
+    const insertAfter = e.clientY > rect.top + rect.height / 2;
+    const without = ids.filter(id => id !== fromId);
+    let toIdx = without.indexOf(targetId);
+    if (insertAfter) toIdx += 1;
+    without.splice(toIdx, 0, fromId);
+    reorderItemsInCat(cat.id, without);
+  };
+  const onItemDragEnd = () => {
+    setDragOverItem(null);
+    if (dragRef.current.type === 'item') dragRef.current = { type:null, id:null, catId:null };
+  };
+
+  // Bordure indicatrice : tirets sur le bord haut ou bas selon dragLine
+  const borderStyle = isDragOver
+    ? dragLine === 'before'
+      ? { borderTop:`2px solid ${C.accent}`, borderBottom:`1px solid ${C.border}`, borderLeft:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }
+      : { borderBottom:`2px solid ${C.accent}`, borderTop:`1px solid ${C.border}`, borderLeft:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }
+    : { border:`1px solid ${C.border}` };
+
+  return (
+    <div
+      draggable
+      onDragStart={onCatDragStart}
+      onDragOver={onCatDragOver}
+      onDrop={onCatDrop}
+      onDragEnd={onCatDragEnd}
+      style={{ marginBottom:7, borderRadius:10, overflow:'hidden', ...borderStyle, transition:'border 0.1s' }}
+    >
+      {/* En-tête */}
+      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background:C.card, userSelect:'none' }}>
+        <span style={{ color:C.muted, fontSize:14, cursor:'grab', paddingRight:2 }}>≡</span>
+        <span onClick={() => setOpen(o=>!o)} style={{ flex:1, display:'flex', alignItems:'center', gap:6, cursor:'pointer' }}>
+          <span style={{ fontSize:15 }}>{cat.emoji}</span>
+          <span style={{ fontWeight:600, fontSize:12, color:C.text }}>{cat.name}</span>
+          <span style={{
+            fontSize:10, fontWeight:700, color:'#fff',
+            background:C.accent, padding:'1px 7px', borderRadius:20, marginLeft:'auto',
+          }}>{items.length}</span>
+          <span style={{ color:C.muted, fontSize:10 }}>{open?'▲':'▼'}</span>
+        </span>
+      </div>
+
+      {/* Articles */}
+      {open && (
+        <div style={{ background:C.bg }}>
+          {allItems.map(item => (
+            <ItemRow
+              key={item.id} item={item}
+              isDragOver={dragOverItem===item.id}
+              onDragStart={e => onItemDragStart(e, item.id)}
+              onDragOver={e => onItemDragOver(e, item.id)}
+              onDrop={e => onItemDrop(e, item.id)}
+              onDragEnd={onItemDragEnd}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd }) {
+  const { deleteShoppingItem, updateShoppingItem } = useApp();
+  const [editing,  setEditing]  = useState(false);
+  const [editName, setEditName] = useState(item.name);
+  const [editQty,  setEditQty]  = useState(item.qty || '');
+  const [editUnit, setEditUnit] = useState(item.unit || '');
+
+  const saveEdit = () => {
+    if (editName.trim()) updateShoppingItem(item.id, { name:editName.trim(), qty:parseFloat(editQty)||0, unit:editUnit });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div style={{ padding:'6px 10px', background:C.cardHov, borderBottom:`1px solid ${C.border}22` }}>
+        <div style={{ display:'flex', gap:5, marginBottom:5 }}>
+          <input autoFocus value={editName} onChange={e=>setEditName(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter') saveEdit(); if(e.key==='Escape') setEditing(false); }}
+            style={{ flex:1, minWidth:0, padding:'4px 8px', background:C.bg, border:`1px solid ${C.accent}66`, borderRadius:6, color:C.text, fontSize:12, outline:'none' }}
+          />
+          <input type="number" value={editQty} onChange={e=>setEditQty(e.target.value)}
+            style={{ width:40, flexShrink:0, padding:'4px 4px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, outline:'none' }}
+          />
+          <select value={editUnit} onChange={e=>setEditUnit(e.target.value)}
+            style={{ width:46, flexShrink:0, padding:'4px 3px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:11, outline:'none' }}>
+            {UNITS.map(u => <option key={u} value={u}>{u||'—'}</option>)}
+          </select>
+        </div>
+        <div style={{ display:'flex', gap:5 }}>
+          <Btn onClick={saveEdit} variant="primary" small>✓ OK</Btn>
+          <Btn onClick={() => setEditing(false)} variant="ghost" small>Annuler</Btn>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      draggable onDragStart={onDragStart} onDragOver={onDragOver}
+      onDrop={onDrop} onDragEnd={onDragEnd}
+      style={{
+        display:'flex', alignItems:'center', gap:7, padding:'7px 10px',
+        borderBottom:`1px solid ${C.border}22`,
+        opacity: item.checked ? 0.42 : 1, transition:'all 0.12s',
+        borderTop: isDragOver ? `2px solid ${C.accent}88` : '2px solid transparent',
+      }}
+    >
+      <span style={{ color:C.border, fontSize:12, cursor:'grab', flexShrink:0, userSelect:'none' }}>⋮⋮</span>
+      <button onClick={() => deleteShoppingItem(item.id)} style={{
+        width:20, height:20, borderRadius:'50%', flexShrink:0,
+        background: item.checked ? C.green : 'transparent',
+        border:`2px solid ${item.checked ? C.green : C.border}`,
+        color:'#fff', cursor:'pointer', fontSize:10,
+        display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.2s',
+      }}>
+        {item.checked ? '✓' : ''}
+      </button>
+      <span onClick={() => !item.checked && setEditing(true)} style={{
+        flex:1, color:C.text, fontSize:12, lineHeight:1.3,
+        textDecoration: item.checked ? 'line-through' : 'none',
+        cursor: item.checked ? 'default' : 'pointer',
+      }}>{item.name}</span>
+      {item.fromRecipeId && <span style={{ fontSize:10, color:C.accent, flexShrink:0 }}>📅</span>}
+      {item.qty > 0 && (
+        <span onClick={() => !item.checked && setEditing(true)} style={{
+          color:C.muted, fontSize:11, flexShrink:0, cursor: item.checked?'default':'pointer',
+        }}>{item.qty}{item.unit?' '+item.unit:''}</span>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  STATS TAB
+// ══════════════════════════════════════════════════════
+function StatsTab() {
+  const { recipes, meals } = useApp();
+
+  // ── Calculs de base ──
+  const favCount     = recipes.filter(r => r.favorite).length;
+  const totalPersons = meals.reduce((s, m) => s + (m.persons || 0), 0);
+  const activeWeeks  = new Set(meals.map(m => m.weekKey)).size;
+
+  // ── Stats par recette ──
+  const recipeCount   = {};
+  const recipePersons = {};
+  const recipeLastTs  = {}; // dernier repas cuisiné (done)
+  meals.forEach(m => {
+    recipeCount[m.recipeId]   = (recipeCount[m.recipeId]   || 0) + 1;
+    recipePersons[m.recipeId] = (recipePersons[m.recipeId] || 0) + (m.persons || 0);
+    if (m.done && (m.addedAt || 0) > (recipeLastTs[m.recipeId] || 0))
+      recipeLastTs[m.recipeId] = m.addedAt;
+  });
+  const sortedByCount = Object.entries(recipeCount).sort(([,a],[,b]) => b-a);
+  const favRecipe  = sortedByCount[0] ? recipes.find(r => r.id === sortedByCount[0][0]) : null;
+  const top5 = sortedByCount.slice(0,5)
+    .map(([id,n]) => ({ r: recipes.find(x => x.id === id), n, persons: recipePersons[id]||0 }))
+    .filter(x => x.r);
+
+  // ── Répartition tags ──
+  const tagCount = {};
+  meals.forEach(m => {
+    const r = recipes.find(x => x.id === m.recipeId);
+    (r?.tags||[]).forEach(t => { tagCount[t] = (tagCount[t]||0)+1; });
+  });
+  const topTags    = Object.entries(tagCount).sort(([,a],[,b]) => b-a).slice(0,8);
+  const maxTagCnt  = topTags[0]?.[1] || 1;
+
+  // ── Heatmap 12 semaines ──
+  const cw = getISOWeekKey();
+  const heatWeeks = Array.from({ length:12 }, (_, i) => {
+    const key   = shiftWeek(cw, i - 11);
+    const count = meals.filter(m => m.weekKey === key).length;
+    return { key, wn: key.split('-W')[1], count };
+  });
+  const maxHeat = Math.max(...heatWeeks.map(w => w.count), 1);
+  const heatColor = (count) => {
+    if (count === 0) return C.border;
+    const t = Math.min(count / maxHeat, 1);
+    return `rgba(123,168,232,${0.2 + t * 0.8})`;
+  };
+
+  // ── Recettes jamais planifiées ──
+  const usedIds      = new Set(meals.map(m => m.recipeId));
+  const neverPlanned = recipes.filter(r => !usedIds.has(r.id));
+
+  const fmtDate = ts => ts
+    ? new Date(ts).toLocaleDateString('fr-FR', { day:'numeric', month:'short' })
+    : null;
+
+  return (
+    <div style={{ padding:14 }}>
+      {meals.length === 0 && <EmptyState icon="📊" text="Planifiez des repas pour voir des statistiques" />}
+
+      {/* ── 3 KPIs ── */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:14 }}>
+        <KpiCard icon="📖" value={recipes.length} label="Recettes"    sub={`dont ${favCount} ⭐`}          color={C.accent} />
+        <KpiCard icon="🍽"  value={meals.length}   label="Repas"       sub={`${totalPersons} portions`}      color={C.green} />
+        <KpiCard icon="📅" value={activeWeeks}    label="Semaines"    sub="avec repas"                       color={C.orange} />
+      </div>
+
+      {/* ── Heatmap ── */}
+      {meals.length > 0 && (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
+          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+            🗓 Activité — 12 dernières semaines
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(12, 1fr)', gap:3 }}>
+            {heatWeeks.map(({ key, wn, count }) => (
+              <div key={key} title={`S${wn} — ${count} repas`} style={{
+                aspectRatio:'1', borderRadius:5,
+                background: heatColor(count),
+                border: key===cw ? `2px solid ${C.accent}` : '1px solid transparent',
+                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+              }}>
+                <span style={{ fontSize:7, color: count>0?C.text:C.muted, lineHeight:1.2 }}>S{wn}</span>
+                {count > 0 && <span style={{ fontSize:8, fontWeight:700, color:C.text }}>{count}</span>}
+              </div>
+            ))}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:10, justifyContent:'flex-end' }}>
+            <span style={{ fontSize:10, color:C.muted }}>0</span>
+            {[0.15, 0.4, 0.7, 1].map(i => (
+              <div key={i} style={{ width:11, height:11, borderRadius:3, background:`rgba(123,168,232,${i})` }} />
+            ))}
+            <span style={{ fontSize:10, color:C.muted }}>max</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Recette favorite enrichie ── */}
+      {favRecipe && (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
+          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+            🏆 Recette la plus cuisinée
+          </div>
+          <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
+            <span style={{ fontSize:40, flexShrink:0 }}>{favRecipe.emoji}</span>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontWeight:700, fontSize:15, color:C.text, marginBottom:3 }}>{favRecipe.name}</div>
+              <Stars value={favRecipe.rating} small />
+              <div style={{ fontSize:12, color:C.muted, marginTop:5, lineHeight:1.7 }}>
+                Planifiée <span style={{ color:C.accent, fontWeight:700 }}>{sortedByCount[0][1]}×</span>
+                {recipePersons[favRecipe.id] > 0 && (
+                  <span> · <span style={{ color:C.text }}>{recipePersons[favRecipe.id]}</span> portions</span>
+                )}
+                {recipeLastTs[favRecipe.id] && (
+                  <span> · dernière fois le <span style={{ color:C.text }}>{fmtDate(recipeLastTs[favRecipe.id])}</span></span>
+                )}
+              </div>
+              {(favRecipe.tags||[]).length > 0 && (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:4, marginTop:7 }}>
+                  {favRecipe.tags.map(t => (
+                    <span key={t} style={{ background:C.accentBg, color:C.accent, fontSize:10, padding:'2px 8px', borderRadius:20 }}>{t}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top 5 avec portions ── */}
+      {top5.length > 0 && (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
+          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+            📊 Recettes les plus cuisinées
+          </div>
+          {top5.map(({ r, n, persons }) => (
+            <div key={r.id} style={{ display:'flex', alignItems:'center', gap:9, marginBottom:10 }}>
+              <span style={{ fontSize:18, flexShrink:0 }}>{r.emoji}</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
+                  <span style={{ fontSize:12, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1, marginRight:6 }}>{r.name}</span>
+                  <span style={{ fontSize:10, color:C.muted, flexShrink:0 }}>{n}× · {persons}p</span>
+                </div>
+                <div style={{ height:5, background:C.border, borderRadius:3, overflow:'hidden' }}>
+                  <div style={{ height:'100%', borderRadius:3, transition:'width 0.6s',
+                    background:`linear-gradient(90deg, ${C.accentDk}, ${C.accent})`,
+                    width:`${(n/top5[0].n)*100}%` }} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Répartition par tags (barres horizontales) ── */}
+      {topTags.length > 0 && (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
+          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+            🏷 Répartition par type de plat
+          </div>
+          {topTags.map(([tag, count]) => (
+            <div key={tag} style={{ marginBottom:9 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                <span style={{ fontSize:12, color:C.text }}>{tag}</span>
+                <span style={{ fontSize:11, color:C.muted }}>{count} repas</span>
+              </div>
+              <div style={{ height:7, background:C.border, borderRadius:4, overflow:'hidden' }}>
+                <div style={{
+                  height:'100%', borderRadius:4, transition:'width 0.6s',
+                  background:`linear-gradient(90deg, ${C.accentDk}, ${C.green})`,
+                  width:`${(count/maxTagCnt)*100}%`,
+                }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Recettes jamais planifiées ── */}
+      {neverPlanned.length > 0 && (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14 }}>
+          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:4 }}>
+            💤 Jamais planifiées
+          </div>
+          <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>
+            {neverPlanned.length} recette{neverPlanned.length>1?'s':''} en attente de leur première fois.
+          </div>
+          {neverPlanned.map((r, i) => (
+            <div key={r.id} style={{
+              display:'flex', alignItems:'center', gap:9, padding:'7px 0',
+              borderTop: i>0 ? `1px solid ${C.border}` : 'none',
+            }}>
+              <span style={{ fontSize:18 }}>{r.emoji}</span>
+              <span style={{ fontSize:12, color:C.soft, flex:1 }}>{r.name}</span>
+              {r.favorite && <span style={{ fontSize:12 }}>⭐</span>}
+              {(r.tags||[]).length > 0 && (
+                <span style={{ fontSize:10, color:C.muted }}>{r.tags[0]}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KpiCard({ icon, value, label, sub, color }) {
+  return (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:'12px 8px', textAlign:'center' }}>
+      <div style={{ fontSize:24, marginBottom:5 }}>{icon}</div>
+      <div style={{ fontSize:22, fontWeight:800, color:color||C.text, lineHeight:1 }}>{value}</div>
+      <div style={{ fontSize:10, color:C.muted, marginTop:3, lineHeight:1.3 }}>{label}</div>
+      {sub && <div style={{ fontSize:9, color:C.muted, marginTop:2, opacity:0.75 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  OPTIONS TAB
+// ══════════════════════════════════════════════════════
+function SettingsTab() {
+  const { cats, settings, recipes, meals, shopping, deleteCat, updSettings, importAllData, showSnack } = useApp();
+  const [editCat,  setEditCat]  = useState(null); // cat object en édition
+  const [addOpen,  setAddOpen]  = useState(false);
+  const [importErr, setImportErr] = useState('');
+  const fileRef = useRef(null);
+
+  const sorted = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
+
+  // ── Export JSON ──────────────────────────────────────
+  const handleExport = () => {
+    const data = {
+      version: VERSION,
+      exportDate: new Date().toISOString(),
+      recipes, meals, shopping, cats, settings,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `meal-plan-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showSnack('✅ Sauvegarde exportée');
+  };
+
+  // ── Import JSON ──────────────────────────────────────
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data.recipes && !data.cats) throw new Error('Fichier invalide');
+        importAllData(data);
+        showSnack('✅ Données restaurées avec succès');
+        setImportErr('');
+      } catch {
+        setImportErr('Fichier JSON invalide ou corrompu.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div style={{ padding:16 }}>
+
+      {/* ── Catégories ── */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <SecTitle style={{ margin:0 }}>Catégories de courses</SecTitle>
+        <Btn onClick={() => setAddOpen(true)} variant="primary" small>+ Nouvelle</Btn>
+      </div>
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:'4px 0', marginBottom:16 }}>
+        {sorted.map((cat, idx) => (
+          <div key={cat.id} style={{
+            display:'flex', alignItems:'center', gap:10, padding:'9px 14px',
+            borderBottom: idx<sorted.length-1 ? `1px solid ${C.border}` : 'none',
+          }}>
+            <span style={{ fontSize:20 }}>{cat.emoji}</span>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontWeight:500, color:C.text, fontSize:13 }}>{cat.name}</div>
+              <div style={{ fontSize:11, color:C.muted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {cat.kw?.length > 0 ? cat.kw.slice(0,5).join(', ') + (cat.kw.length > 5 ? '…' : '') : 'Aucun mot-clé'}
+              </div>
+            </div>
+            <button onClick={() => setEditCat(cat)} style={{
+              background:C.accentBg, border:`1px solid ${C.accent}33`, color:C.accent,
+              borderRadius:7, padding:'4px 10px', cursor:'pointer', fontSize:12, flexShrink:0,
+            }}>✏️</button>
+            {cat.name !== 'Autre' && (
+              <button onClick={() => deleteCat(cat.id)} style={{
+                background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:16, opacity:0.7, flexShrink:0,
+              }}>×</button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* ── Sauvegarde ── */}
+      <SecTitle>Sauvegarde & Restauration</SecTitle>
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16, marginBottom:16 }}>
+        <div style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.6 }}>
+          Exportez toutes vos données (recettes, planning, courses, catégories) dans un fichier JSON. Vous pourrez les restaurer à tout moment.
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <Btn onClick={handleExport} variant="primary" style={{ flex:1, justifyContent:'center' }}>
+            📤 Exporter
+          </Btn>
+          <Btn onClick={() => fileRef.current?.click()} variant="default" style={{ flex:1, justifyContent:'center' }}>
+            📥 Importer
+          </Btn>
+          <input ref={fileRef} type="file" accept=".json,application/json" onChange={handleImportFile} style={{ display:'none' }} />
+        </div>
+        {importErr && (
+          <div style={{ marginTop:10, color:C.red, fontSize:12 }}>⚠️ {importErr}</div>
+        )}
+        <div style={{ marginTop:12, fontSize:11, color:C.muted, lineHeight:1.6 }}>
+          {recipes.length} recette{recipes.length!==1?'s':''} · {meals.length} repas · {shopping.length} article{shopping.length!==1?'s':''} · {cats.length} catégorie{cats.length!==1?'s':''}
+        </div>
+      </div>
+
+      {/* ── À propos ── */}
+      <SecTitle>À propos</SecTitle>
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <span style={{ fontWeight:800, fontSize:17, color:C.text }}>🍽 Meal Plan</span>
+          <span style={{ background:C.accentBg, color:C.accent, fontSize:13, fontWeight:700, padding:'4px 12px', borderRadius:20, border:`1px solid ${C.accent}33` }}>v{VERSION}</span>
+        </div>
+        <p style={{ color:C.muted, fontSize:13, lineHeight:1.7, marginBottom:12 }}>
+          Application de planification de repas hebdomadaire.
+        </p>
+        <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
+          <div style={{ fontSize:11, color:C.muted, fontWeight:600, marginBottom:6 }}>Historique</div>
+          <div style={{ fontSize:11, color:C.muted, lineHeight:1.9 }}>
+            <span style={{ color:C.accent }}>1.8.0</span> — Planning annuel · compacité · multi-ajout<br/>
+            <span style={{ color:C.accent }}>1.9.0</span> — Import recettes depuis sites web<br/>
+            <span style={{ color:C.accent }}>2.0.0</span> — IngredientParser · EmojiGuesser · Jow API<br/>
+            <span style={{ color:C.accent }}>2.1.0</span> — Édition catégories · Export/Import JSON
+          </div>
+        </div>
+      </div>
+
+      {/* ── Modaux ── */}
+      {editCat && (
+        <CategoryEditModal cat={editCat} onClose={() => setEditCat(null)} />
+      )}
+      {addOpen && (
+        <CategoryAddModal onClose={() => setAddOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+function CategoryEditModal({ cat, onClose }) {
+  const { updateCat } = useApp();
+  const [emoji, setEmoji] = useState(cat.emoji || '📦');
+  const [name,  setName]  = useState(cat.name || '');
+  const [kwStr, setKwStr] = useState((cat.kw || []).join(', '));
+  const inp = { padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none', width:'100%' };
+
+  const save = () => {
+    if (!name.trim()) return;
+    updateCat({ ...cat, emoji, name:name.trim(), kw:kwStr.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean) });
+    onClose();
+  };
+
+  return (
+    <BottomSheet title={`Modifier la catégorie`} onClose={onClose}>
+      <div style={{ padding:16 }}>
+        <div style={{ display:'flex', gap:12, alignItems:'flex-start', marginBottom:16 }}>
+          <EmojiPicker value={emoji} onChange={setEmoji} />
+          <div style={{ flex:1 }}>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom</label>
+            <input value={name} onChange={e=>setName(e.target.value)} style={inp} />
+          </div>
+        </div>
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>
+            🔑 Mots-clés <span style={{ fontWeight:400 }}>(séparés par virgule)</span>
+          </label>
+          <textarea value={kwStr} onChange={e=>setKwStr(e.target.value)} rows={4}
+            placeholder="poulet, bœuf, saumon, dinde..."
+            style={{ ...inp, resize:'vertical', lineHeight:1.7 }}
+          />
+          <div style={{ fontSize:11, color:C.muted, marginTop:5, lineHeight:1.5 }}>
+            Les articles dont le nom contient un de ces mots sont classés automatiquement dans cette catégorie.
+          </div>
+        </div>
+        <Btn onClick={save} variant="primary" disabled={!name.trim()} style={{ width:'100%', justifyContent:'center' }}>
+          Enregistrer
+        </Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function CategoryAddModal({ onClose }) {
+  const { addCat } = useApp();
+  const [emoji, setEmoji] = useState('📦');
+  const [name,  setName]  = useState('');
+  const [kwStr, setKwStr] = useState('');
+  const inp = { padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none', width:'100%' };
+
+  const create = () => {
+    if (!name.trim()) return;
+    addCat({ name:name.trim(), emoji, kw:kwStr.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean) });
+    onClose();
+  };
+
+  return (
+    <BottomSheet title="Nouvelle catégorie" onClose={onClose}>
+      <div style={{ padding:16 }}>
+        <div style={{ display:'flex', gap:12, alignItems:'flex-start', marginBottom:16 }}>
+          <EmojiPicker value={emoji} onChange={setEmoji} />
+          <div style={{ flex:1 }}>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom *</label>
+            <input value={name} onChange={e=>setName(e.target.value)}
+              placeholder="Surgelés, Épices, Apéro..."
+              style={inp}
+            />
+          </div>
+        </div>
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>
+            🔑 Mots-clés <span style={{ fontWeight:400 }}>(séparés par virgule)</span>
+          </label>
+          <textarea value={kwStr} onChange={e=>setKwStr(e.target.value)} rows={4}
+            placeholder="tofu, tempeh, seitan, edamame..."
+            style={{ ...inp, resize:'vertical', lineHeight:1.7 }}
+          />
+          <div style={{ fontSize:11, color:C.muted, marginTop:5, lineHeight:1.5 }}>
+            Facultatif — les articles contenant ces mots seront classés ici automatiquement.
+          </div>
+        </div>
+        <Btn onClick={create} variant="primary" disabled={!name.trim()} style={{ width:'100%', justifyContent:'center' }}>
+          Créer la catégorie
+        </Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  SNACKBAR
+// ══════════════════════════════════════════════════════
+function Snackbar() {
+  const { snack, setSnack } = useApp();
+  if (!snack) return null;
+  return (
+    <div style={{
+      position:'fixed', bottom:84, left:'50%', transform:'translateX(-50%)',
+      background:'#253040', color:C.text, padding:'12px 16px',
+      borderRadius:14, display:'flex', alignItems:'center', gap:12,
+      boxShadow:'0 8px 28px rgba(0,0,0,0.5)', zIndex:600,
+      animation:'slideUp 0.2s ease', maxWidth:360, width:'calc(100% - 32px)',
+      border:`1px solid ${C.border}`,
+    }}>
+      <span style={{ flex:1, fontSize:13 }}>{snack.msg}</span>
+      {snack.undo && (
+        <button onClick={() => { snack.undo(); setSnack(null); }} style={{
+          background:C.accent, color:'#fff', border:'none',
+          padding:'5px 14px', borderRadius:8, cursor:'pointer', fontSize:13, fontWeight:700,
+        }}>Annuler</button>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  APP SHELL
+// ══════════════════════════════════════════════════════
+function AppShell() {
+  const [tab, setTab] = useState('planning');
+  return (
+    <div style={{ height:'100vh', background:C.bg, display:'flex', flexDirection:'column', maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
+      <AppHeader tab={tab} />
+      <main style={{ flex:1, overflowY:'auto', paddingBottom:84 }}>
+        {tab === 'planning' && <PlanningTab />}
+        {tab === 'recipes'  && <RecipesTab />}
+        {tab === 'shopping' && <ShoppingTab />}
+        {tab === 'stats'    && <StatsTab />}
+        {tab === 'settings' && <SettingsTab />}
+      </main>
+      <BottomNav tab={tab} setTab={setTab} />
+      <Snackbar />
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  EXPORT PRINCIPAL
+// ══════════════════════════════════════════════════════
+export default function MealPlanApp() {
+  return (
+    <AppProvider>
+      <>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+          *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+          html, body { background: #111419; font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif; }
+          ::-webkit-scrollbar { width: 5px; height: 5px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: #2A3040; border-radius: 4px; }
+          @keyframes fadeIn  { from { opacity: 0; }              to { opacity: 1; } }
+          @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+          @keyframes spin    { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        `}</style>
+        <AppShell />
+      </>
+    </AppProvider>
+  );
+}
