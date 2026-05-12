@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v17
+import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v18
 
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
@@ -175,19 +175,26 @@ function AppProvider({ children }) {
 
   /* ── Repas ── */
   const addMeal = (weekKey, recipeId, persons) => {
+    // N'ajoute QUE le repas au planning — les ingrédients sont ajoutés
+    // séparément via addIngredientsFromRecipe après sélection utilisateur.
     setMeals(p => [...p, { id: genId(), weekKey, recipeId, persons, done: false, addedAt: ts() }]);
-    const rec = recipes.find(r => r.id === recipeId);
-    if (rec?.ingredients?.length) {
-      const scale = persons / (rec.portions || 4);
-      setShopping(p => [...p, ...rec.ingredients.map(ing => ({
+  };
+
+  const addIngredientsFromRecipe = (recipe, persons, selectedIngIds) => {
+    const scale = persons / (recipe.portions || 4);
+    const items = (recipe.ingredients || [])
+      .filter(ing => selectedIngIds.includes(ing.id))
+      .map(ing => ({
         id: genId(), name: ing.name,
         qty:  ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0,
         unit: ing.unit || '',
-        categoryId: categorize(ing.name, cats),
-        fromRecipeId: recipeId, checked: false,
-        sortOrder: ts() + Math.random(), addedAt: ts(),
-      }))]);
-    }
+        categoryId:  categorize(ing.name, cats),
+        fromRecipeId: recipe.id,
+        checked: false,
+        sortOrder: ts() + Math.random(),
+        addedAt: ts(),
+      }));
+    if (items.length) setShopping(p => [...p, ...items]);
   };
 
   const updateMealPersons = (id, delta) =>
@@ -262,7 +269,7 @@ function AppProvider({ children }) {
     <AppCtx.Provider value={{
       recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
       addRecipe, updateRecipe, deleteRecipe,
-      addMeal, updateMealPersons, toggleMealDone, deleteMeal, duplicateWeek,
+      addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, deleteMeal, duplicateWeek,
       addShoppingItem, deleteShoppingItem, updateShoppingItem, clearChecked, clearAll,
       reorderItemsInCat, addCat, deleteCat, updateCat, reorderCats, updSettings, importAllData,
     }}>
@@ -488,12 +495,218 @@ function BottomNav({ tab, setTab }) {
 }
 
 // ══════════════════════════════════════════════════════
+//  INGREDIENT FILTER MODAL
+//  Affiché après sélection d'une recette dans RecipePicker
+//  Permet de choisir quels ingrédients ajouter aux courses
+// ══════════════════════════════════════════════════════
+function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
+  const { cats } = useApp();
+
+  // Construit la liste plate de tous les ingrédients avec catégorie
+  const allItems = useMemo(() => selections.flatMap(({ recipe, persons }) =>
+    (recipe.ingredients || []).map(ing => ({
+      key:        `${recipe.id}_${ing.id}`,
+      id:         ing.id,
+      recipeId:   recipe.id,
+      recipeName: recipe.name,
+      recipeEmoji:recipe.emoji,
+      name:       ing.name,
+      qty:        ing.qty ? Math.round(ing.qty * (persons / (recipe.portions || 4)) * 10) / 10 : 0,
+      unit:       ing.unit || '',
+      catId:      categorize(ing.name, cats),
+    }))
+  ), [selections, cats]);
+
+  // État des cases : tout coché par défaut
+  const [checked, setChecked] = useState(
+    () => new Set(allItems.map(i => i.key))
+  );
+
+  const toggle = (key) => setChecked(p => {
+    const ns = new Set(p);
+    ns.has(key) ? ns.delete(key) : ns.add(key);
+    return ns;
+  });
+
+  // Groupement par catégorie de courses
+  const sortedCats = useMemo(() => {
+    const map = {};
+    allItems.forEach(item => {
+      if (!map[item.catId]) {
+        const cat = cats.find(c => c.id === item.catId);
+        map[item.catId] = { catId: item.catId, catName: cat?.name || '?', catEmoji: cat?.emoji || '📦', items: [] };
+      }
+      map[item.catId].items.push(item);
+    });
+    return Object.values(map).sort((a,b) => {
+      const oa = cats.find(c=>c.id===a.catId)?.order ?? 99;
+      const ob = cats.find(c=>c.id===b.catId)?.order ?? 99;
+      return oa - ob;
+    });
+  }, [allItems, cats]);
+
+  const toggleCat = (items) => {
+    const allOn = items.every(i => checked.has(i.key));
+    setChecked(p => {
+      const ns = new Set(p);
+      items.forEach(i => allOn ? ns.delete(i.key) : ns.add(i.key));
+      return ns;
+    });
+  };
+
+  const checkedCount = checked.size;
+  const totalCount   = allItems.length;
+  const multiRecipe  = selections.length > 1;
+
+  const handleConfirm = () => {
+    const selectedByRecipe = {};
+    allItems.forEach(item => {
+      if (checked.has(item.key)) {
+        if (!selectedByRecipe[item.recipeId]) selectedByRecipe[item.recipeId] = [];
+        selectedByRecipe[item.recipeId].push(item.id);
+      }
+    });
+    onConfirm(selectedByRecipe);
+  };
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, zIndex:800,
+      background:'rgba(0,0,0,0.65)', display:'flex',
+      alignItems:'flex-end', justifyContent:'center',
+    }}>
+      <div style={{
+        width:'100%', maxWidth:480,
+        background:C.bg, borderRadius:'18px 18px 0 0',
+        maxHeight:'85vh', display:'flex', flexDirection:'column',
+        animation:'slideUp 0.22s ease-out',
+      }}>
+        {/* Header */}
+        <div style={{
+          background:'linear-gradient(135deg,#0F2137,#1A3A6C)',
+          borderRadius:'18px 18px 0 0', padding:'16px 18px', flexShrink:0,
+        }}>
+          <div style={{ color:'#fff', fontWeight:700, fontSize:16, marginBottom:2 }}>
+            🛒 Ingrédients à ajouter
+          </div>
+          <div style={{ color:'#7EC8FF', fontSize:12 }}>
+            {multiRecipe
+              ? `${selections.length} recettes · décochez ce que vous avez déjà`
+              : `${selections[0].recipe.emoji} ${selections[0].recipe.name} · décochez ce que vous avez déjà`}
+          </div>
+        </div>
+
+        {/* Liste scrollable */}
+        <div style={{ overflowY:'auto', flex:1, paddingBottom:4 }}>
+          {sortedCats.map(({ catId, catName, catEmoji, items }) => {
+            const allOn  = items.every(i => checked.has(i.key));
+            const someOn = items.some(i => checked.has(i.key));
+            return (
+              <div key={catId}>
+                {/* En-tête catégorie */}
+                <div
+                  onClick={() => toggleCat(items)}
+                  style={{
+                    display:'flex', alignItems:'center', gap:9,
+                    padding:'9px 16px', background:C.card,
+                    borderBottom:`1px solid ${C.border}`, cursor:'pointer',
+                    position:'sticky', top:0, zIndex:1,
+                  }}>
+                  {/* Checkbox catégorie */}
+                  <div style={{
+                    width:18, height:18, borderRadius:4, flexShrink:0,
+                    background: allOn ? C.accentDk : someOn ? 'rgba(72,120,200,0.4)' : 'transparent',
+                    border:`2px solid ${allOn||someOn ? C.accentDk : C.border}`,
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                  }}>
+                    {allOn  && <span style={{color:'#fff',fontSize:10,fontWeight:700}}>✓</span>}
+                    {someOn && !allOn && <span style={{color:'#fff',fontSize:10}}>–</span>}
+                  </div>
+                  <span style={{fontSize:16}}>{catEmoji}</span>
+                  <span style={{fontSize:12, fontWeight:600, color:C.text, flex:1}}>{catName}</span>
+                  <span style={{fontSize:11, color:C.muted}}>
+                    {items.filter(i=>checked.has(i.key)).length}/{items.length}
+                  </span>
+                </div>
+
+                {/* Ingrédients */}
+                {items.map(item => {
+                  const on = checked.has(item.key);
+                  return (
+                    <div key={item.key} onClick={() => toggle(item.key)} style={{
+                      display:'flex', alignItems:'center', gap:10,
+                      padding:'8px 16px 8px 44px', cursor:'pointer',
+                      borderBottom:`1px solid ${C.border}22`,
+                      opacity: on ? 1 : 0.38,
+                      transition:'opacity 0.15s',
+                    }}>
+                      <div style={{
+                        width:16, height:16, borderRadius:4, flexShrink:0,
+                        background: on ? C.accentDk : 'transparent',
+                        border:`2px solid ${on ? C.accentDk : C.border}`,
+                        display:'flex', alignItems:'center', justifyContent:'center',
+                      }}>
+                        {on && <span style={{color:'#fff',fontSize:9,fontWeight:700}}>✓</span>}
+                      </div>
+                      <span style={{flex:1, fontSize:13, color:C.text}}>{item.name}</span>
+                      {multiRecipe && (
+                        <span style={{fontSize:10, color:C.muted, marginRight:4}}>{item.recipeEmoji}</span>
+                      )}
+                      {item.qty > 0 && (
+                        <span style={{fontSize:11, color:C.muted}}>{item.qty} {item.unit}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding:'12px 16px', borderTop:`1px solid ${C.border}`,
+          background:C.card, flexShrink:0,
+        }}>
+          <div style={{fontSize:12, color:C.muted, marginBottom:10, textAlign:'center'}}>
+            {checkedCount > 0
+              ? <><span style={{color:C.accent, fontWeight:600}}>{checkedCount}</span> à ajouter · <span>{totalCount-checkedCount}</span> ignorés</>
+              : <span style={{color:C.muted}}>Aucun ingrédient sélectionné</span>}
+          </div>
+          <div style={{display:'flex', gap:8}}>
+            <button onClick={onCancel} style={{
+              flex:1, padding:'9px', borderRadius:10, border:`1px solid ${C.border}`,
+              background:'transparent', color:C.muted, fontSize:13,
+              cursor:'pointer', fontFamily:'inherit',
+            }}>Annuler</button>
+            <button onClick={onSkip} style={{
+              flex:1, padding:'9px', borderRadius:10, border:`1px solid ${C.border}`,
+              background:'transparent', color:C.soft, fontSize:13,
+              cursor:'pointer', fontFamily:'inherit',
+            }}>Ignorer les courses</button>
+            <button onClick={handleConfirm} disabled={checkedCount === 0} style={{
+              flex:2, padding:'9px', borderRadius:10, border:'none',
+              background: checkedCount > 0 ? C.accentDk : C.border,
+              color: checkedCount > 0 ? '#fff' : C.muted,
+              fontSize:13, fontWeight:600,
+              cursor: checkedCount > 0 ? 'pointer' : 'default',
+              fontFamily:'inherit', transition:'all 0.15s',
+            }}>Ajouter {checkedCount > 0 ? checkedCount : ''} ✓</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
 //  PLANNING TAB
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
-  const { meals, addMeal, duplicateWeek } = useApp();
+  const { meals, recipes, addMeal, addIngredientsFromRecipe, duplicateWeek } = useApp();
   const [pickerWeek,  setPickerWeek]  = useState(null);
   const [dupWeek,     setDupWeek]     = useState(null);
+  const [filterData,  setFilterData]  = useState(null); // {weekKey, selections:[{recipe,persons}]}
   const [btnVisible,  setBtnVisible]  = useState(false);
   const currentWeek    = getISOWeekKey();
   const currentWeekRef = useRef(null);
@@ -583,8 +796,36 @@ function PlanningTab() {
         <RecipePicker
           onClose={() => setPickerWeek(null)}
           onSelect={(recipeIds, persons) => {
-            recipeIds.forEach(id => addMeal(pickerWeek, id, persons));
+            const selections = recipeIds
+              .map(id => ({ recipe: recipes.find(r => r.id === id), persons }))
+              .filter(s => s.recipe);
+            const hasIngredients = selections.some(s => s.recipe.ingredients?.length > 0);
             setPickerWeek(null);
+            if (hasIngredients) {
+              setFilterData({ weekKey: pickerWeek, selections });
+            } else {
+              // Aucune recette n'a d'ingrédients → ajout direct
+              selections.forEach(({ recipe, persons: p }) => addMeal(pickerWeek, recipe.id, p));
+            }
+          }}
+        />
+      )}
+      {filterData && (
+        <IngredientFilterModal
+          selections={filterData.selections}
+          onSkip={() => {
+            // Ajoute les repas sans ingrédients
+            filterData.selections.forEach(({ recipe, persons: p }) => addMeal(filterData.weekKey, recipe.id, p));
+            setFilterData(null);
+          }}
+          onCancel={() => setFilterData(null)}
+          onConfirm={(selectedByRecipe) => {
+            filterData.selections.forEach(({ recipe, persons: p }) => {
+              addMeal(filterData.weekKey, recipe.id, p);
+              const ids = selectedByRecipe[recipe.id] || [];
+              if (ids.length) addIngredientsFromRecipe(recipe, p, ids);
+            });
+            setFilterData(null);
           }}
         />
       )}
