@@ -21,9 +21,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        // ── Activer le debug Chrome DevTools (chrome://inspect sur PC) ──
-        WebView.setWebContentsDebuggingEnabled(true);
+        WebView.setWebContentsDebuggingEnabled(true); // chrome://inspect pour debug
 
         webView = new WebView(this);
         setContentView(webView);
@@ -43,39 +41,24 @@ public class MainActivity extends AppCompatActivity {
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
         webView.setWebViewClient(new WebViewClient() {
-
             @Override
             public void onPageFinished(WebView view, String url) {
-                // Injecte un capteur d'erreurs JS → visible en Toast sur le téléphone
+                // Capteur d'erreurs JS → Toast visible sans USB
                 view.evaluateJavascript(
-                    "window.onerror = function(msg, src, line, col, err) {" +
-                    "  if (window.Android) Android.showError('JS: ' + msg + ' [' + src + ':' + line + ']');" +
-                    "  return false;" +
-                    "};" +
-                    "window.addEventListener('unhandledrejection', function(e) {" +
-                    "  if (window.Android) Android.showError('Promise: ' + (e.reason || e));" +
-                    "});" +
-                    // Vérifie que #root existe et que React l'a monté
-                    "setTimeout(function() {" +
-                    "  var root = document.getElementById('root');" +
-                    "  if (!root) { Android.showError('ERREUR : #root introuvable dans le DOM'); return; }" +
-                    "  if (!root.hasChildNodes()) { Android.showError('ERREUR : React na pas monté dans #root. Script defer = ' + (document.querySelector(\"script[defer]\") ? 'oui' : 'non')); }" +
-                    "}, 3000);",
-                    null
-                );
+                    "window.onerror=function(m,s,l){Android.showError('JS: '+m+' ['+s+':'+l+']');return false;};" +
+                    "window.addEventListener('unhandledrejection',function(e){Android.showError('Promise: '+e.reason);});" +
+                    "setTimeout(function(){" +
+                    "  var r=document.getElementById('root');" +
+                    "  if(!r||!r.hasChildNodes())Android.showError('React non monté — vérifier defer dans index.html');" +
+                    "},3000);", null);
             }
-
             @Override
-            public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
-                if (req.isForMainFrame()) {
-                    String msg = "Erreur chargement : " + err.getDescription()
-                               + " (" + err.getErrorCode() + ")\n" + req.getUrl();
-                    showToast(msg);
-                }
+            public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
+                if (req.isForMainFrame())
+                    showToast("Erreur: " + err.getDescription() + " — " + req.getUrl());
             }
-
             @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            public boolean shouldOverrideUrlLoading(WebView v, String url) {
                 if (!url.startsWith("file://") && !url.startsWith("https://api.anthropic.com")) {
                     startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                     return true;
@@ -85,44 +68,63 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.setWebChromeClient(new WebChromeClient());
-
-        // Pont JS → Toast + partage natif
-        webView.addJavascriptInterface(new NativeBridge(), "Android");
-
+        webView.addJavascriptInterface(new Bridge(), "Android");
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    public class NativeBridge {
+    // ══════════════════════════════════════════════════════
+    //  JAVASCRIPT BRIDGE
+    // ══════════════════════════════════════════════════════
+    public class Bridge {
 
-        // Appelé par le capteur d'erreurs JS injecté dans onPageFinished
+        /**
+         * Import de recette natif (OkHttp + Jsoup, pas de CORS).
+         * Appelé depuis JS : Android.importRecipe(url, callbackId)
+         * Résultat retourné via : window.__mpImport[callbackId](result)
+         */
         @JavascriptInterface
-        public void showError(final String error) {
-            runOnUiThread(() -> showToast("❌ " + error));
+        public void importRecipe(final String url, final String cbId) {
+            new Thread(() -> {
+                String result = RecipeImporter.importFromUrl(url);
+                // Échappe les backslashes et apostrophes pour l'injection JS
+                final String safe = result
+                        .replace("\\", "\\\\")
+                        .replace("'", "\\'");
+                runOnUiThread(() ->
+                    webView.evaluateJavascript(
+                        "(function(){" +
+                        "  var cb=window.__mpImport&&window.__mpImport['" + cbId + "'];" +
+                        "  if(cb){try{cb(JSON.parse('" + safe + "'));}catch(e){cb({error:e.message});}" +
+                        "  delete window.__mpImport['" + cbId + "'];}" +
+                        "})()", null)
+                );
+            }).start();
         }
 
-        // Partage natif Android
+        /** Partage natif Android */
         @JavascriptInterface
         public void share(String title, String text) {
-            Intent intent = new Intent(Intent.ACTION_SEND);
-            intent.setType("text/plain");
-            intent.putExtra(Intent.EXTRA_TITLE, title);
-            intent.putExtra(Intent.EXTRA_TEXT, text);
-            startActivity(Intent.createChooser(intent, "Partager via…"));
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("text/plain");
+            i.putExtra(Intent.EXTRA_TITLE, title);
+            i.putExtra(Intent.EXTRA_TEXT, text);
+            startActivity(Intent.createChooser(i, "Partager via…"));
+        }
+
+        /** Affiche une erreur JS en Toast (debug) */
+        @JavascriptInterface
+        public void showError(final String msg) {
+            runOnUiThread(() -> showToast("❌ " + msg));
         }
     }
 
     private void showToast(final String msg) {
-        runOnUiThread(() ->
-            Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show()
-        );
+        runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_LONG).show());
     }
 
-    @Override
-    public void onBackPressed() {
-        if (webView.canGoBack()) webView.goBack();
-        else super.onBackPressed();
+    @Override public void onBackPressed() {
+        if (webView.canGoBack()) webView.goBack(); else super.onBackPressed();
     }
-
     @Override protected void onPause()  { webView.onPause();  super.onPause(); }
     @Override protected void onResume() { super.onResume();   webView.onResume(); }
 }
