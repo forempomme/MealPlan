@@ -48,32 +48,44 @@ jobs:
       - name: Builder l'application web (Vite)
         run: npm run build
 
-      # ── Patch critique : Vite injecte toujours type="module" dans le HTML
-      # même quand rollupOptions.format = 'iife'. Le HTML plugin de Vite
-      # est indépendant de Rollup. Or WebView Android bloque les ES modules
-      # sur file:// (null origin). On retire type="module" et crossorigin.
-      - name: Patcher index.html pour WebView Android
+      # ── Patch index.html pour WebView Android ────────────────
+      # Problème : Vite met <script type="module"> dans <head>.
+      #   1) type="module" est bloqué sur file:// (null origin CORS)
+      #   2) Sans type="module", le script s'exécute AVANT </body>
+      #      donc document.getElementById('root') retourne null
+      #      et React plante silencieusement → écran noir.
+      # Solution : remplacer type="module" par defer
+      #   - defer = exécution après parsing complet du DOM ✓
+      #   - pas de restriction ES module sur file:// ✓
+      - name: Patcher index.html — remplacer type="module" par defer
         run: |
           echo "=== Avant patch ==="
           grep -n "script\|link rel" dist/index.html || true
 
-          # Supprimer type="module" et crossorigin des balises script
+          # Remplace type="module" crossorigin par defer (conserve l'attribut src)
+          sed -i 's/type="module" crossorigin/defer/g' dist/index.html
+          # Au cas où l'ordre serait différent
+          sed -i 's/crossorigin type="module"/defer/g' dist/index.html
+          # Nettoie type="module" seul si encore présent
           sed -i 's/ type="module"//g' dist/index.html
+          # Nettoie crossorigin seul si encore présent
           sed -i 's/ crossorigin//g' dist/index.html
-          # Supprimer les <link rel="modulepreload"> (inutiles en non-module)
+          # Supprime les <link rel="modulepreload"> (inutiles)
           sed -i '/<link rel="modulepreload"/d' dist/index.html
 
           echo ""
           echo "=== Après patch ==="
           grep -n "script\|link rel" dist/index.html || true
 
-          # Vérification finale
           if grep -q 'type="module"' dist/index.html; then
-            echo "❌ ERREUR : type=module encore présent"
+            echo "❌ type=module encore présent !"
             exit 1
-          else
-            echo "✅ Patch OK — aucun type=module"
           fi
+          if ! grep -q 'defer' dist/index.html; then
+            echo "❌ defer absent de index.html !"
+            exit 1
+          fi
+          echo "✅ Patch OK — script defer sans type=module"
 
       - name: Copier dist/ vers android/app/src/main/assets/
         run: |
@@ -82,10 +94,10 @@ jobs:
           echo "Assets copiés :"
           find android/app/src/main/assets/ -type f | sort
 
-      - name: Restaurer le keystore depuis GitHub Secrets
+      - name: Restaurer le keystore
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/meal-plan.keystore
-          echo "✅ Keystore restauré ($(wc -c < android/app/meal-plan.keystore) octets)"
+          echo "✅ Keystore restauré"
 
       - name: Build APK Release signé
         working-directory: android
@@ -96,7 +108,7 @@ jobs:
             -PkeyAlias="${{ secrets.KEY_ALIAS }}" \
             -PkeyPassword="${{ secrets.KEY_PASSWORD }}"
 
-      - name: Renommer l'APK avec le numéro de version
+      - name: Renommer l'APK
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           APK_SRC="android/app/build/outputs/apk/release/app-release.apk"
@@ -113,14 +125,10 @@ jobs:
           path: ${{ env.APK_DEST }}
           retention-days: 90
 
-      - name: Résumé du build
+      - name: Résumé
         run: |
           NOTE="${{ inputs.note }}"
-          echo "### ✅ Meal Plan v${{ env.VERSION }} — Build réussi" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Meal Plan v${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
           [ -n "$NOTE" ] && echo "> $NOTE" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Fichier | Taille |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| \`${{ env.APK_DEST }}\` | $(du -h ${{ env.APK_DEST }} | cut -f1) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📥 Téléchargez dans **Actions → Artifacts**." >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Actions → Artifacts**" >> $GITHUB_STEP_SUMMARY
