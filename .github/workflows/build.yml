@@ -48,28 +48,38 @@ jobs:
       - name: Builder l'application web (Vite)
         run: npm run build
 
-      # ── Vérification critique ─────────────────────────────
-      - name: Vérifier le contenu du build web
+      # ── Patch critique : Vite injecte toujours type="module" dans le HTML
+      # même quand rollupOptions.format = 'iife'. Le HTML plugin de Vite
+      # est indépendant de Rollup. Or WebView Android bloque les ES modules
+      # sur file:// (null origin). On retire type="module" et crossorigin.
+      - name: Patcher index.html pour WebView Android
         run: |
-          echo "=== Contenu de dist/ ==="
-          find dist/ -type f | sort
+          echo "=== Avant patch ==="
+          grep -n "script\|link rel" dist/index.html || true
+
+          # Supprimer type="module" et crossorigin des balises script
+          sed -i 's/ type="module"//g' dist/index.html
+          sed -i 's/ crossorigin//g' dist/index.html
+          # Supprimer les <link rel="modulepreload"> (inutiles en non-module)
+          sed -i '/<link rel="modulepreload"/d' dist/index.html
+
           echo ""
-          echo "=== Vérification index.html ==="
-          head -20 dist/index.html
-          echo ""
-          echo "=== Vérification qu'il n'y a PAS de type=module ==="
+          echo "=== Après patch ==="
+          grep -n "script\|link rel" dist/index.html || true
+
+          # Vérification finale
           if grep -q 'type="module"' dist/index.html; then
-            echo "❌ ERREUR : type=module détecté ! Le build IIFE a échoué."
+            echo "❌ ERREUR : type=module encore présent"
             exit 1
           else
-            echo "✅ Aucun type=module — format IIFE correct"
+            echo "✅ Patch OK — aucun type=module"
           fi
 
       - name: Copier dist/ vers android/app/src/main/assets/
         run: |
           mkdir -p android/app/src/main/assets
           cp -r dist/* android/app/src/main/assets/
-          echo "=== Assets copiés dans Android ==="
+          echo "Assets copiés :"
           find android/app/src/main/assets/ -type f | sort
 
       - name: Restaurer le keystore depuis GitHub Secrets
