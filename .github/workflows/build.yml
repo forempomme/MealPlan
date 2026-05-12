@@ -31,7 +31,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       # ── 4. Java 17 ───────────────────────────────────────
       - name: Setup Java 17
@@ -48,7 +47,7 @@ jobs:
 
       # ── 6. Dépendances npm ───────────────────────────────
       - name: Installer les dépendances npm
-        run: npm ci
+        run: npm install
 
       # ── 7. Build web ─────────────────────────────────────
       - name: Builder l'application web (Vite)
