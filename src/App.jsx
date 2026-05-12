@@ -1,9 +1,9 @@
-import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"
+import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v16
 
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.1.0"
+const VERSION = "2.1.0"; // v13
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -1362,6 +1362,160 @@ function parseTextRecipe(text) {
   return { name, servings: 4, cookTimeMinutes: 0, tags: [], ingredients, steps, note: '' };
 }
 
+// ══════════════════════════════════════════════════════
+//  HTML PARSERS  (JSON-LD → __NEXT_DATA__ → Microdata)
+// ══════════════════════════════════════════════════════
+
+/** Durée ISO 8601 → minutes  (PT1H30M → 90) */
+function parseDuration(iso) {
+  if (!iso) return 0;
+  const m = String(iso).match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
+  return m ? (parseInt(m[1]||0) * 60) + parseInt(m[2]||0) : 0;
+}
+
+/** Extrait le nombre de portions depuis une valeur brute */
+function parseServings(raw) {
+  if (!raw) return 4;
+  if (typeof raw === 'number') return raw;
+  const m = String(raw).match(/\d+/);
+  return m ? parseInt(m[0]) : 4;
+}
+
+/** Aplatis les instructions Schema.org (HowToStep, HowToSection, string…) */
+function parseInstructions(raw) {
+  if (!raw) return [];
+  if (typeof raw === 'string') return raw.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  if (Array.isArray(raw)) {
+    return raw.flatMap(item => {
+      if (!item) return [];
+      if (typeof item === 'string') return [item.trim()];
+      if (item['@type'] === 'HowToSection') return parseInstructions(item.itemListElement);
+      return [(item.text || item.name || item.description || '').trim()];
+    }).filter(Boolean);
+  }
+  return [];
+}
+
+/** Normalise un objet Schema.org Recipe → format interne */
+function normalizeSchemaRecipe(s) {
+  const rawIng = s.recipeIngredient || s.ingredients || [];
+  const ingredients = (Array.isArray(rawIng) ? rawIng : [rawIng])
+    .map(i => typeof i === 'string' ? i : i.name || '')
+    .filter(Boolean);
+
+  const steps = parseInstructions(s.recipeInstructions || s.instructions || s.steps);
+
+  const tags = [];
+  const cat = s.recipeCategory || s.category;
+  if (cat) (Array.isArray(cat) ? cat : [cat]).forEach(c => typeof c==='string' && tags.push(c));
+
+  return {
+    name:            (typeof s.name === 'string' ? s.name : '').trim(),
+    cookTimeMinutes: parseDuration(s.totalTime || s.cookTime),
+    servings:        parseServings(s.recipeYield),
+    ingredients,
+    steps,
+    tags,
+    note:            s.description ? '' : '',
+  };
+}
+
+/**
+ * Cherche récursivement un objet { "@type": "Recipe" } dans n'importe quelle
+ * structure JSON jusqu'à `depth` niveaux (gère @graph, tableaux, objets imbriqués).
+ */
+function findRecipeInObj(obj, depth = 10) {
+  if (!obj || typeof obj !== 'object' || depth === 0) return null;
+  const t = obj['@type'];
+  if (t === 'Recipe' || (Array.isArray(t) && t.includes('Recipe'))) return obj;
+  if (Array.isArray(obj)) {
+    for (const item of obj) { const r = findRecipeInObj(item, depth-1); if (r) return r; }
+    return null;
+  }
+  for (const val of Object.values(obj)) {
+    if (val && typeof val === 'object') { const r = findRecipeInObj(val, depth-1); if (r) return r; }
+  }
+  return null;
+}
+
+/**
+ * Heuristique pour __NEXT_DATA__ : trouve un objet avec name + recipeIngredient/ingredients
+ * sans forcément avoir @type = Recipe.
+ */
+function findRecipeHeuristic(obj, depth = 12) {
+  if (!obj || typeof obj !== 'object' || depth === 0) return null;
+  if (!Array.isArray(obj)) {
+    if (obj.name && typeof obj.name === 'string' &&
+        (obj.recipeIngredient || obj.ingredients) &&
+        (obj.recipeInstructions || obj.instructions || obj.steps)) {
+      return obj;
+    }
+  }
+  const items = Array.isArray(obj) ? obj : Object.values(obj);
+  for (const val of items) {
+    if (val && typeof val === 'object') {
+      const r = findRecipeHeuristic(val, depth-1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+/** Étape 2 — JSON-LD : <script type="application/ld+json"> */
+function parseJsonLd(doc) {
+  const scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+  for (const script of scripts) {
+    try {
+      const json = JSON.parse(script.textContent);
+      const recipe = findRecipeInObj(json);
+      if (recipe) return normalizeSchemaRecipe(recipe);
+    } catch (_) {}
+  }
+  return null;
+}
+
+/** Étape 3 — __NEXT_DATA__ : <script id="__NEXT_DATA__"> (sites Next.js) */
+function parseNextData(doc) {
+  const script = doc.getElementById('__NEXT_DATA__');
+  if (!script) return null;
+  try {
+    const json = JSON.parse(script.textContent);
+    const byType = findRecipeInObj(json, 12);
+    if (byType) return normalizeSchemaRecipe(byType);
+    const byHeuristic = findRecipeHeuristic(json, 12);
+    if (byHeuristic) return normalizeSchemaRecipe(byHeuristic);
+  } catch (_) {}
+  return null;
+}
+
+/** Étape 4 — Microdata : [itemtype*="schema.org/Recipe"] */
+function parseMicrodata(doc) {
+  const root = doc.querySelector('[itemtype*="schema.org/Recipe"],[itemtype*="Recipe"]');
+  if (!root) return null;
+  const get    = prop => root.querySelector(`[itemprop="${prop}"]`);
+  const getVal = prop => { const el=get(prop); return el ? (el.getAttribute('content')||el.textContent.trim()) : null; };
+  const getAll = prop => Array.from(root.querySelectorAll(`[itemprop="${prop}"]`))
+                              .map(el => el.getAttribute('content')||el.textContent.trim())
+                              .filter(Boolean);
+  const name = getVal('name');
+  if (!name) return null;
+  return {
+    name,
+    cookTimeMinutes: parseDuration(getVal('totalTime') || getVal('cookTime')),
+    servings:        parseServings(getVal('recipeYield')),
+    ingredients:     getAll('recipeIngredient'),
+    steps:           getAll('recipeInstructions'),
+    tags:            getAll('recipeCategory'),
+    note:            '',
+  };
+}
+
+/** Pipeline complet HTML → ParsedRecipe (JSON-LD → __NEXT_DATA__ → Microdata) */
+function parseHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return parseJsonLd(doc) || parseNextData(doc) || parseMicrodata(doc) || null;
+}
+
 function RecipeEditor({ recipe, onClose, onSave }) {
   const [form, setForm] = useState({
     ...recipe,
@@ -1402,9 +1556,29 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     };
   };
 
-  // ── Étapes 2-4 : JSON-LD → __NEXT_DATA__ → Microdata → texte (via Claude) ──
+  // ── Étape 2 : pont natif Android (OkHttp + Jsoup, pas de CORS) ──
+  // RecipeImporter.java exécute le pipeline complet :
+  //   Jow API → JSON-LD (récursif 10 niveaux) → __NEXT_DATA__ → Microdata
+  // Le résultat est retourné via callback car @JavascriptInterface est async.
+  const fetchViaAndroid = (url) => new Promise((resolve, reject) => {
+    if (!window.Android?.importRecipe) {
+      reject(new Error('Pont Android indisponible'));
+      return;
+    }
+    setImportStep('📱 Import natif Android (OkHttp + Jsoup)…');
+    const cbId = 'mp_' + Date.now();
+    window.__mpImport = window.__mpImport || {};
+    window.__mpImport[cbId] = (result) => {
+      if (result?.error) reject(new Error(result.error));
+      else resolve(result);
+    };
+    // Lance l'import Java ; MainActivity rappelle window.__mpImport[cbId](result)
+    window.Android.importRecipe(url, cbId);
+  });
+
+  // ── Fallback : Claude API (web_search) ────────────────────
   const fetchViaClaude = async (url) => {
-    setImportStep('🔍 Téléchargement et analyse de la page…');
+    setImportStep('🤖 Analyse via Claude AI (fallback)…');
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1413,32 +1587,18 @@ function RecipeEditor({ recipe, onClose, onSave }) {
         max_tokens: 3000,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system: `Tu es un parseur de recettes de cuisine. Accède à l'URL fournie et extrais la recette.
-
-Stratégie d'extraction par ordre de priorité :
-1. JSON-LD : cherche <script type="application/ld+json"> contenant "@type":"Recipe" — recherche récursive dans @graph, tableaux, jusqu'à 10 niveaux de profondeur.
-2. __NEXT_DATA__ : si le site est Next.js, cherche <script id="__NEXT_DATA__"> et fouille récursivement (12 niveaux) soit "@type":"Recipe", soit heuristiquement un objet avec "name" + "recipeIngredient".
-3. Microdata : cherche itemtype contenant "Recipe", puis itemprop="recipeIngredient" et itemprop="recipeInstructions".
-4. Texte brut : cherche les sections "Ingrédients" et "Préparation" dans le texte de la page.
-
-Réponds UNIQUEMENT avec un objet JSON valide. Pas de markdown, pas de backticks, aucun texte avant ou après.
-Format exact :
-{"name":"Nom exact du plat","servings":4,"cookTimeMinutes":30,"tags":["tag1","tag2"],"ingredients":["200 g de farine","3 œufs","1 pincée de sel"],"steps":["Étape 1 complète","Étape 2 complète"],"note":""}
-
-RÈGLES IMPORTANTES :
-- ingredients : tableau de CHAÎNES BRUTES exactement comme sur le site (ex: "200 g de farine tamisée") — NE PAS parser, NE PAS modifier
-- servings : nombre de portions ORIGINAL du site (pas 6, pas normalisé)
-- steps : toutes les étapes, complètes et détaillées
-- tags : 2-4 mots-clés en français décrivant le plat`,
-        messages: [{ role: 'user', content: `Accède à cette URL et extrais la recette au format JSON : ${url}` }],
+Stratégie : JSON-LD (@type:Recipe) → __NEXT_DATA__ → Microdata → texte brut.
+Réponds UNIQUEMENT avec un objet JSON valide, sans markdown.
+Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredients":["200 g de farine"],"steps":["Étape 1"],"note":""}
+- ingredients : chaînes BRUTES telles qu'elles apparaissent sur le site
+- servings : nombre ORIGINAL du site`,
+        messages: [{ role: 'user', content: `Extrais la recette de : ${url}` }],
       }),
     });
-    setImportStep('⚙️ Extraction des données structurées…');
     const data = await res.json();
     const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
-    const raw   = texts[texts.length - 1] || '';
-    const json  = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-    const rec   = JSON.parse(json);
-    // Normalise ingredients en strings si Claude a retourné des objets
+    const raw   = (texts[texts.length - 1] || '').replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+    const rec   = JSON.parse(raw);
     rec.ingredients = (rec.ingredients || []).map(i =>
       typeof i === 'string' ? i : [i.qty||'', i.unit||'', i.name||''].filter(Boolean).join(' ')
     );
@@ -1470,14 +1630,16 @@ RÈGLES IMPORTANTES :
       } else {
         const url = importUrl.trim();
         if (!url) return;
+
+        // ── Jow : API dédiée ──────────────────────────
         if (url.includes('jow.fr')) {
-          try   { raw = await fetchJow(url); }
+          try { raw = await fetchJow(url); }
           catch (e) {
-            setImportStep('↩ API Jow inaccessible, bascule sur Claude…');
-            raw = await fetchViaClaude(url);
+            setImportStep('↩ API Jow inaccessible, essai HTML…');
+            raw = await tryHtmlPipeline(url);
           }
         } else {
-          raw = await fetchViaClaude(url);
+          raw = await tryHtmlPipeline(url);
         }
       }
 
@@ -1500,11 +1662,20 @@ RÈGLES IMPORTANTES :
       console.error(e);
       const isBadJson = e.message?.includes('JSON') || e.message?.includes('parse') || e instanceof SyntaxError;
       setImportError(isBadJson
-        ? 'Données structurées introuvables sur cette page. Essaie le mode "Coller le texte".'
+        ? 'Données structurées introuvables. Essaie le mode "Coller le texte".'
         : (e.message || "Impossible d'extraire la recette."));
       setImportStep('');
     } finally {
       setImporting(false);
+    }
+  };
+
+  // Essaie le pont Android, puis Claude en fallback
+  const tryHtmlPipeline = async (url) => {
+    try   { return await fetchViaAndroid(url); }
+    catch (e) {
+      setImportStep(`↩ ${e.message} — bascule sur Claude AI…`);
+      return await fetchViaClaude(url);
     }
   };
 
