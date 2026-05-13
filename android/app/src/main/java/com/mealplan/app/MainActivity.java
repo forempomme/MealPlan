@@ -21,7 +21,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        WebView.setWebContentsDebuggingEnabled(true); // chrome://inspect pour debug
+        WebView.setWebContentsDebuggingEnabled(true);
 
         webView = new WebView(this);
         setContentView(webView);
@@ -43,13 +43,12 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                // Capteur d'erreurs JS → Toast visible sans USB
                 view.evaluateJavascript(
                     "window.onerror=function(m,s,l){Android.showError('JS: '+m+' ['+s+':'+l+']');return false;};" +
                     "window.addEventListener('unhandledrejection',function(e){Android.showError('Promise: '+e.reason);});" +
                     "setTimeout(function(){" +
                     "  var r=document.getElementById('root');" +
-                    "  if(!r||!r.hasChildNodes())Android.showError('React non monté — vérifier defer dans index.html');" +
+                    "  if(!r||!r.hasChildNodes())Android.showError('React non monté');" +
                     "},3000);", null);
             }
             @Override
@@ -72,24 +71,12 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    // ══════════════════════════════════════════════════════
-    //  JAVASCRIPT BRIDGE
-    // ══════════════════════════════════════════════════════
     public class Bridge {
-
-        /**
-         * Import de recette natif (OkHttp + Jsoup, pas de CORS).
-         * Appelé depuis JS : Android.importRecipe(url, callbackId)
-         * Résultat retourné via : window.__mpImport[callbackId](result)
-         */
         @JavascriptInterface
         public void importRecipe(final String url, final String cbId) {
             new Thread(() -> {
                 String result = RecipeImporter.importFromUrl(url);
-                // Échappe les backslashes et apostrophes pour l'injection JS
-                final String safe = result
-                        .replace("\\", "\\\\")
-                        .replace("'", "\\'");
+                final String safe = result.replace("\\","\\\\").replace("'","\\'");
                 runOnUiThread(() ->
                     webView.evaluateJavascript(
                         "(function(){" +
@@ -101,7 +88,6 @@ public class MainActivity extends AppCompatActivity {
             }).start();
         }
 
-        /** Partage natif Android */
         @JavascriptInterface
         public void share(String title, String text) {
             Intent i = new Intent(Intent.ACTION_SEND);
@@ -111,7 +97,6 @@ public class MainActivity extends AppCompatActivity {
             startActivity(Intent.createChooser(i, "Partager via…"));
         }
 
-        /** Affiche une erreur JS en Toast (debug) */
         @JavascriptInterface
         public void showError(final String msg) {
             runOnUiThread(() -> showToast("❌ " + msg));

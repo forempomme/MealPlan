@@ -1,13 +1,11 @@
 <resources>
-    <!-- Theme.Material.NoTitleBar.Fullscreen n'existe pas dans l'AAPT.
-         Theme.AppCompat.NoActionBar est disponible via androidx.appcompat. -->
+    <!-- Theme.AppCompat.NoActionBar : cache la barre de titre Android
+         mais CONSERVE la barre de statut (notifications, heure...).
+         La couleur #0F2137 se fond dans le dégradé du header app. -->
     <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">#111419</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowFullscreen">true</item>
-        <item name="android:windowContentOverlay">@null</item>
-        <item name="android:statusBarColor">#111419</item>
-        <item name="android:navigationBarColor">#111419</item>
+        <item name="android:statusBarColor">#0F2137</item>
+        <item name="android:navigationBarColor">#0F2137</item>
         <item name="colorPrimary">#7BA8E8</item>
         <item name="colorAccent">#5CC4A0</item>
     </style>

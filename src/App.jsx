@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v18
+import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v20
 
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
@@ -284,8 +284,8 @@ function AppProvider({ children }) {
 function Btn({ onClick, children, variant='default', small, disabled, style }) {
   const base = {
     display:'inline-flex', alignItems:'center', gap:5,
-    padding: small ? '5px 12px' : '8px 18px',
-    borderRadius:9, fontWeight:500, fontSize: small?12:14,
+    padding: small ? '7px 14px' : '9px 18px',
+    borderRadius:9, fontWeight:500, fontSize: small?13:15,
     transition:'all 0.15s', cursor: disabled?'not-allowed':'pointer',
     opacity: disabled?0.5:1, border:'none', flexShrink:0,
   };
@@ -388,7 +388,7 @@ function Stars({ value, onChange, small }) {
 }
 
 function SecTitle({ children }) {
-  return <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10, marginTop:20 }}>{children}</div>;
+  return <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10, marginTop:20 }}>{children}</div>;
 }
 
 function EmptyState({ icon, text }) {
@@ -422,17 +422,17 @@ function AppHeader({ tab }) {
       position:'sticky', top:0, zIndex:100, flexShrink:0,
     }}>
       <div>
-        <div style={{ fontWeight:800, fontSize:20, color:'#FFFFFF', letterSpacing:'-0.02em', lineHeight:1.1 }}>
+        <div style={{ fontWeight:800, fontSize:22, color:'#FFFFFF', letterSpacing:'-0.02em', lineHeight:1.1 }}>
           🍽 Meal Plan
         </div>
-        <div style={{ fontSize:13, color:'#7EC8FF', marginTop:3, fontWeight:500 }}>
+        <div style={{ fontSize:15, color:'#7EC8FF', marginTop:3, fontWeight:500 }}>
           {t?.icon} {t?.label}
         </div>
       </div>
       <div style={{
         background: 'rgba(126,200,255,0.15)',
         color: '#7EC8FF',
-        fontSize:12, fontWeight:700, padding:'5px 13px', borderRadius:20,
+        fontSize:13, fontWeight:700, padding:'5px 13px', borderRadius:20,
         border:'1px solid rgba(126,200,255,0.4)', letterSpacing:'0.02em',
       }}>v{VERSION}</div>
     </header>
@@ -469,7 +469,7 @@ function BottomNav({ tab, setTab }) {
             )}
             {/* Icône + badge */}
             <div style={{ position:'relative' }}>
-              <span style={{ fontSize:24 }}>{item.icon}</span>
+              <span style={{ fontSize:26 }}>{item.icon}</span>
               {item.id === 'shopping' && shopCount > 0 && (
                 <span style={{
                   position:'absolute', top:-4, right:-7,
@@ -481,7 +481,7 @@ function BottomNav({ tab, setTab }) {
               )}
             </div>
             <span style={{
-              fontSize:12, fontWeight: active ? 700 : 400,
+              fontSize:13, fontWeight: active ? 700 : 400,
               color: active ? '#7EC8FF' : '#3A6080',
               letterSpacing:'0.04em',
             }}>
@@ -706,81 +706,153 @@ function PlanningTab() {
   const { meals, recipes, addMeal, addIngredientsFromRecipe, duplicateWeek } = useApp();
   const [pickerWeek,  setPickerWeek]  = useState(null);
   const [dupWeek,     setDupWeek]     = useState(null);
-  const [filterData,  setFilterData]  = useState(null); // {weekKey, selections:[{recipe,persons}]}
+  const [filterData,  setFilterData]  = useState(null);
   const [btnVisible,  setBtnVisible]  = useState(false);
   const currentWeek    = getISOWeekKey();
+  const currentYear    = new Date().getFullYear();
+  const [year, setYear] = useState(currentYear);
   const currentWeekRef = useRef(null);
 
-  // 52/53 semaines de l'année, ordre ascendant
+  const MIN_YEAR = currentYear - 1;
+  const MAX_YEAR = 2050;
+
+  // Semaines ISO de l'année sélectionnée
   const allWeeks = useMemo(() => {
-    const year  = new Date().getFullYear();
     const jan4  = new Date(year, 0, 4);
     const start = new Date(jan4);
     start.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
     const weeks = [];
-    for (let i = 0; i < 53; i++) {
+    for (let i = 0; i < 54; i++) {
       const d = new Date(start);
       d.setDate(start.getDate() + i * 7);
       const key = getISOWeekKey(d);
       if (key.startsWith(String(year))) weeks.push(key);
     }
     return weeks;
-  }, []);
+  }, [year]);
 
-  // Scroll initial centré sur la semaine en cours
+  // Scroll vers la semaine en cours (si présente) ou vers le haut lors d'un changement d'année
   useEffect(() => {
     const t = setTimeout(() => {
-      currentWeekRef.current?.scrollIntoView({ behavior: 'auto', block: 'center' });
+      if (currentWeekRef.current) {
+        currentWeekRef.current.scrollIntoView({ behavior: 'auto', block: 'center' });
+      } else {
+        // Année différente de l'année courante → scroll vers le haut
+        const main = document.querySelector('main');
+        if (main) main.scrollTop = 0;
+      }
     }, 80);
     return () => clearTimeout(t);
-  }, []);
+  }, [year]);
 
-  // Bouton visible dès que la carte de la semaine en cours sort de l'écran
+  // Bouton "Semaine en cours" — visible si hors écran OU si on n'est pas dans l'année courante
   useEffect(() => {
-    // On attend que le scroll initial soit fait, puis on attache sur <main>
+    if (year !== currentYear) { setBtnVisible(true); return; }
     const t = setTimeout(() => {
-      const el      = currentWeekRef.current;
+      const el = currentWeekRef.current;
       if (!el) return;
       const scroller = el.closest('main') || document.documentElement;
-
       const check = () => {
         if (!currentWeekRef.current) return;
         const elR  = currentWeekRef.current.getBoundingClientRect();
         const conR = scroller.getBoundingClientRect();
         setBtnVisible(!(elR.top < conR.bottom && elR.bottom > conR.top));
       };
-
       scroller.addEventListener('scroll', check, { passive: true });
-      check(); // état initial
-      // stocke le cleanup dans l'élément pour le retrouver au démontage
+      check();
       el._cleanupScroll = () => scroller.removeEventListener('scroll', check);
     }, 150);
+    return () => { clearTimeout(t); currentWeekRef.current?._cleanupScroll?.(); };
+  }, [year, currentYear]);
 
-    return () => {
-      clearTimeout(t);
-      currentWeekRef.current?._cleanupScroll?.();
-    };
-  }, []);
+  const goToCurrentWeek = () => {
+    if (year !== currentYear) setYear(currentYear);
+    else currentWeekRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
 
-  const scrollToCurrent = () =>
-    currentWeekRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Raccourcis d'années affichés dans la barre de navigation
+  const shortcuts = useMemo(() => {
+    const s = new Set([currentYear - 1, currentYear, currentYear + 1, currentYear + 2]);
+    [2030, 2035, 2040, 2045, 2050].forEach(y => { if (y > currentYear + 2) s.add(y); });
+    return [...s].filter(y => y >= MIN_YEAR && y <= MAX_YEAR).sort((a,b)=>a-b);
+  }, [currentYear, MIN_YEAR, MAX_YEAR]);
 
   return (
     <div style={{ position:'relative' }}>
-      {/* Bouton flottant — uniquement quand la semaine est hors écran */}
+      {/* Bouton flottant */}
       {btnVisible && (
         <div style={{
           position:'sticky', top:4, zIndex:50,
           display:'flex', justifyContent:'flex-end',
           padding:'0 12px', pointerEvents:'none',
         }}>
-          <Btn onClick={scrollToCurrent} variant="accent" small
+          <Btn onClick={goToCurrentWeek} variant="accent" small
             style={{ pointerEvents:'all', boxShadow:'0 3px 14px rgba(0,0,0,0.45)' }}>
             📅 Semaine en cours
           </Btn>
         </div>
       )}
 
+      {/* ── Sélecteur d'année ── */}
+      <div style={{ position:'sticky', top: btnVisible ? 36 : 0, zIndex:40, background:C.card, borderBottom:`1px solid ${C.border}` }}>
+        {/* Ligne principale : flèches + année */}
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 14px' }}>
+          <button
+            onClick={() => year > MIN_YEAR && setYear(y => y - 1)}
+            disabled={year <= MIN_YEAR}
+            style={{
+              background:'none', border:`1px solid ${year > MIN_YEAR ? C.border : 'transparent'}`,
+              borderRadius:8, padding:'4px 12px', cursor: year > MIN_YEAR ? 'pointer' : 'default',
+              color: year > MIN_YEAR ? C.accent : C.border, fontSize:20, lineHeight:1,
+            }}>‹</button>
+
+          <div style={{ textAlign:'center', flex:1 }}>
+            <span style={{
+              fontWeight:800, fontSize:21,
+              color: year === currentYear ? C.accent : C.text,
+              letterSpacing:'-0.02em',
+            }}>{year}</span>
+            {year === currentYear && (
+              <span style={{
+                marginLeft:7, fontSize:10, fontWeight:600,
+                background:C.accentBg, color:C.accent,
+                padding:'2px 8px', borderRadius:10,
+                border:`1px solid ${C.accent}33`,
+                verticalAlign:'middle',
+              }}>en cours</span>
+            )}
+            {year !== currentYear && (
+              <span style={{ marginLeft:6, fontSize:11, color:C.muted, verticalAlign:'middle' }}>
+                {year < currentYear ? `${currentYear - year} an${currentYear-year>1?'s':''} avant` : `dans ${year - currentYear} an${year-currentYear>1?'s':''}`}
+              </span>
+            )}
+          </div>
+
+          <button
+            onClick={() => year < MAX_YEAR && setYear(y => y + 1)}
+            disabled={year >= MAX_YEAR}
+            style={{
+              background:'none', border:`1px solid ${year < MAX_YEAR ? C.border : 'transparent'}`,
+              borderRadius:8, padding:'4px 12px', cursor: year < MAX_YEAR ? 'pointer' : 'default',
+              color: year < MAX_YEAR ? C.accent : C.border, fontSize:20, lineHeight:1,
+            }}>›</button>
+        </div>
+
+        {/* Raccourcis rapides */}
+        <div style={{ display:'flex', gap:5, padding:'0 10px 8px', overflowX:'auto' }}>
+          {shortcuts.map(y => (
+            <button key={y} onClick={() => setYear(y)} style={{
+              padding:'3px 10px', borderRadius:20, flexShrink:0, cursor:'pointer',
+              fontSize:11, fontWeight: y === year ? 700 : 400,
+              background: y === year ? C.accentDk : 'transparent',
+              color: y === year ? '#fff' : y === currentYear ? C.accent : C.muted,
+              border:`1px solid ${y === year ? C.accentDk : y === currentYear ? C.accent+'55' : C.border}`,
+            }}>{y}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Liste des semaines */}
       <div style={{ padding:'8px 12px 12px' }}>
         {allWeeks.map(wk => (
           <div key={wk} ref={wk === currentWeek ? currentWeekRef : null}>
@@ -865,35 +937,35 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup }) {
       borderRadius:12, marginBottom:6, overflow:'hidden',
     }}>
       <div onClick={() => setExpanded(e => !e)} style={{
-        padding:'7px 12px', display:'flex', justifyContent:'space-between', alignItems:'center',
+        padding:'9px 13px', display:'flex', justifyContent:'space-between', alignItems:'center',
         cursor:'pointer', borderBottom: expanded ? `1px solid ${C.border}33` : 'none',
         userSelect:'none',
       }}>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           {isCurrent && (
             <span style={{
-              fontSize:10, background:'rgba(100,185,255,0.2)', color:'#64B9FF',
+              fontSize:11, background:'rgba(100,185,255,0.2)', color:'#64B9FF',
               padding:'2px 8px', borderRadius:10, fontWeight:700, letterSpacing:'0.04em',
               border:'1px solid rgba(100,185,255,0.4)',
             }}>EN COURS</span>
           )}
-          <span style={{ fontWeight:600, fontSize:13, color: isCurrent ? '#64B9FF' : C.text }}>
+          <span style={{ fontWeight:600, fontSize:15, color: isCurrent ? '#64B9FF' : C.text }}>
             S{wn}
           </span>
-          <span style={{ fontSize:11, color:C.muted }}>{getWeekRange(weekKey)}</span>
+          <span style={{ fontSize:13, color:C.muted }}>{getWeekRange(weekKey)}</span>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           {weekMeals.length > 0 && (
-            <span style={{ fontSize:11, color:C.muted }}>{weekMeals.length} repas</span>
+            <span style={{ fontSize:13, color:C.muted }}>{weekMeals.length} repas</span>
           )}
-          <span style={{ color:C.muted, fontSize:11 }}>{expanded ? '▲' : '▼'}</span>
+          <span style={{ color:C.muted, fontSize:13 }}>{expanded ? '▲' : '▼'}</span>
         </div>
       </div>
 
       {expanded && (
-        <div style={{ padding:'6px 10px 10px' }}>
+        <div style={{ padding:'8px 10px 12px' }}>
           {weekMeals.length === 0 && (
-            <div style={{ padding:'8px 0', color:C.muted, fontSize:12, textAlign:'center' }}>
+            <div style={{ padding:'8px 0', color:C.muted, fontSize:13, textAlign:'center' }}>
               Aucun repas — cliquez sur + pour ajouter
             </div>
           )}
@@ -926,24 +998,24 @@ function MealItem({ meal, recipe }) {
       display:'flex', alignItems:'center', gap:6,
       background: meal.done ? C.cookedBg : C.planBg,
       border:`1px solid ${meal.done ? C.green+'33' : C.planBdr}`,
-      borderRadius:9, padding:'6px 8px', marginBottom:4, transition:'all 0.2s',
+      borderRadius:9, padding:'8px 10px', marginBottom:4, transition:'all 0.2s',
     }}>
       {/* Bouton cuisinée */}
       <button onClick={() => toggleMealDone(meal.id)} style={{
-        width:22, height:22, borderRadius:'50%',
+        width:24, height:24, borderRadius:'50%',
         border:`2px solid ${meal.done ? C.green : C.border}`,
         background: meal.done ? C.green : 'transparent',
         display:'flex', alignItems:'center', justifyContent:'center',
-        cursor:'pointer', color:'#fff', fontSize:11, flexShrink:0, transition:'all 0.2s',
+        cursor:'pointer', color:'#fff', fontSize:12, flexShrink:0, transition:'all 0.2s',
       }}>
         {meal.done ? '✓' : ''}
       </button>
 
-      <span style={{ fontSize:16, flexShrink:0 }}>{recipe.emoji}</span>
+      <span style={{ fontSize:18, flexShrink:0 }}>{recipe.emoji}</span>
 
       <div style={{ flex:1, minWidth:0 }}>
         <div style={{
-          fontWeight:500, fontSize:13, color: meal.done ? C.muted : C.text,
+          fontWeight:500, fontSize:15, color: meal.done ? C.muted : C.text,
           textDecoration: meal.done ? 'line-through' : 'none',
           overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
         }}>{recipe.name}</div>
@@ -953,12 +1025,12 @@ function MealItem({ meal, recipe }) {
       <div style={{ display:'flex', alignItems:'center', gap:2, flexShrink:0 }}>
         <button onClick={() => updateMealPersons(meal.id, -1)} style={{
           background:C.border, border:'none', color:C.text,
-          width:18, height:18, borderRadius:4, cursor:'pointer', fontSize:12, lineHeight:1,
+          width:20, height:20, borderRadius:4, cursor:'pointer', fontSize:13, lineHeight:1,
         }}>−</button>
-        <span style={{ fontSize:11, color:C.muted, minWidth:20, textAlign:'center' }}>👥{meal.persons}</span>
+        <span style={{ fontSize:12, color:C.muted, minWidth:22, textAlign:'center' }}>👥{meal.persons}</span>
         <button onClick={() => updateMealPersons(meal.id, +1)} style={{
           background:C.border, border:'none', color:C.text,
-          width:18, height:18, borderRadius:4, cursor:'pointer', fontSize:12, lineHeight:1,
+          width:20, height:20, borderRadius:4, cursor:'pointer', fontSize:13, lineHeight:1,
         }}>+</button>
       </div>
 
@@ -967,7 +1039,7 @@ function MealItem({ meal, recipe }) {
         background: confirm ? C.redBg : 'transparent',
         border: confirm ? `1px solid ${C.red}33` : 'none',
         color: confirm ? C.red : C.muted,
-        borderRadius:6, padding:'2px 5px', cursor:'pointer', fontSize:11, flexShrink:0, transition:'all 0.2s',
+        borderRadius:6, padding:'2px 6px', cursor:'pointer', fontSize:12, flexShrink:0, transition:'all 0.2s',
       }}>
         {confirm ? '✓' : '🗑'}
       </button>
@@ -1025,7 +1097,7 @@ function RecipePicker({ onClose, onSelect }) {
                 </div>
                 <span style={{ fontSize:22, flexShrink:0 }}>{r.emoji}</span>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontWeight:500, fontSize:13, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</div>
+                  <div style={{ fontWeight:500, fontSize:15, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</div>
                   <div style={{ fontSize:11, color:C.muted }}>
                     {r.portions}p{r.cookTimeMinutes ? ` · ⏱ ${r.cookTimeMinutes}min` : ''}{r.favorite ? ' · ⭐' : ''}
                   </div>
@@ -2563,7 +2635,7 @@ function StatsTab() {
       {/* ── Heatmap ── */}
       {meals.length > 0 && (
         <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
-          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+          <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
             🗓 Activité — 12 dernières semaines
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(12, 1fr)', gap:3 }}>
@@ -2592,7 +2664,7 @@ function StatsTab() {
       {/* ── Recette favorite enrichie ── */}
       {favRecipe && (
         <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
-          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+          <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
             🏆 Recette la plus cuisinée
           </div>
           <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
@@ -2624,7 +2696,7 @@ function StatsTab() {
       {/* ── Top 5 avec portions ── */}
       {top5.length > 0 && (
         <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
-          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+          <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
             📊 Recettes les plus cuisinées
           </div>
           {top5.map(({ r, n, persons }) => (
@@ -2649,7 +2721,7 @@ function StatsTab() {
       {/* ── Répartition par tags (barres horizontales) ── */}
       {topTags.length > 0 && (
         <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
-          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
+          <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
             🏷 Répartition par type de plat
           </div>
           {topTags.map(([tag, count]) => (
@@ -2673,7 +2745,7 @@ function StatsTab() {
       {/* ── Recettes jamais planifiées ── */}
       {neverPlanned.length > 0 && (
         <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14 }}>
-          <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:4 }}>
+          <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:4 }}>
             💤 Jamais planifiées
           </div>
           <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>
@@ -2701,10 +2773,10 @@ function StatsTab() {
 function KpiCard({ icon, value, label, sub, color }) {
   return (
     <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:'12px 8px', textAlign:'center' }}>
-      <div style={{ fontSize:24, marginBottom:5 }}>{icon}</div>
-      <div style={{ fontSize:22, fontWeight:800, color:color||C.text, lineHeight:1 }}>{value}</div>
-      <div style={{ fontSize:10, color:C.muted, marginTop:3, lineHeight:1.3 }}>{label}</div>
-      {sub && <div style={{ fontSize:9, color:C.muted, marginTop:2, opacity:0.75 }}>{sub}</div>}
+      <div style={{ fontSize:26, marginBottom:6 }}>{icon}</div>
+      <div style={{ fontSize:24, fontWeight:800, color:color||C.text, lineHeight:1 }}>{value}</div>
+      <div style={{ fontSize:11, color:C.muted, marginTop:3, lineHeight:1.3 }}>{label}</div>
+      {sub && <div style={{ fontSize:10, color:C.muted, marginTop:2, opacity:0.75 }}>{sub}</div>}
     </div>
   );
 }
