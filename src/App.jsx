@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.1.0"; // v13
+const VERSION = "2.2.0"; // v14
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -31,20 +31,6 @@ const C = {
   yellow:   '#E8D878',
 };
 
-// ══════════════════════════════════════════════════════
-//  EMOJIS ALIMENTAIRES (~80 emojis par catégorie)
-// ══════════════════════════════════════════════════════
-const FOOD_EMOJIS = {
-  "🥩 Viandes":     ["🥩","🍗","🍖","🥓","🌭","🍔","🫀","🐄","🐓","🐖"],
-  "🐟 Poissons":    ["🐟","🐠","🦐","🦑","🦞","🦀","🐙","🍣","🦈","🫧"],
-  "🥦 Légumes":     ["🥦","🥕","🌽","🍅","🧅","🧄","🥬","🥒","🌶️","🫑","🥑","🍆","🥔","🫛","🥜","🌿"],
-  "🍎 Fruits":      ["🍎","🍊","🍋","🍌","🍇","🍓","🫐","🍑","🥝","🍍","🥭","🍒","🍐","🍈","🫒"],
-  "🍝 Plats":       ["🍝","🍜","🍲","🥘","🍛","🍱","🥗","🫕","🥫","🥙","🌮","🌯","🫔","🥡"],
-  "🍰 Desserts":    ["🍰","🎂","🧁","🍩","🍪","🍫","🍬","🍭","🍮","🧇","🥞","🍡","🍧"],
-  "🥐 Boulangerie": ["🍞","🥐","🥖","🫓","🥨","🧆","🥯","🫙"],
-  "☕ Boissons":    ["☕","🍵","🧃","🥤","🍺","🍷","🥛","🧋","🍹","🧉"],
-  "🍽 Divers":      ["🍽️","🥣","🧀","🥚","🫠","🍱","🥡","🫙","🥗","🌱"],
-};
 
 const UNITS = ['','g','kg','ml','cl','L','cs','cc','tasse','pincée','tranche','boîte','sachet','bouquet','gousse'];
 
@@ -107,6 +93,15 @@ function categorize(name, cats) {
   return cats.find(c => !c.kw || c.kw.length === 0)?.id ?? cats[cats.length - 1]?.id;
 }
 
+/** Retourne les ingrédients sélectionnés sans correspondance de mot-clé */
+function getUncatIngredients(recipe, ingIds, cats) {
+  return (recipe.ingredients || [])
+    .filter(ing => ingIds.includes(ing.id))
+    .filter(ing => !cats.some(c =>
+      c.kw?.length > 0 && c.kw.some(k => ing.name.toLowerCase().includes(k.toLowerCase()))
+    ));
+}
+
 // ══════════════════════════════════════════════════════
 //  DONNÉES INITIALES (démo)
 // ══════════════════════════════════════════════════════
@@ -144,17 +139,46 @@ const INIT_MEALS = [
 ];
 
 // ══════════════════════════════════════════════════════
+//  PERSISTANCE — localStorage + fallback mémoire
+//  Fonctionne en WebView Android ET dans un artefact Claude
+// ══════════════════════════════════════════════════════
+const _mem = {};
+const _ls  = (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch { return null; } })();
+
+function loadFromStorage(key, defaultValue) {
+  if (_ls) {
+    try {
+      const stored = _ls.getItem(key);
+      if (stored !== null) return JSON.parse(stored);
+    } catch {}
+  }
+  return _mem[key] !== undefined ? _mem[key] : defaultValue;
+}
+
+function saveToStorage(key, value) {
+  _mem[key] = value;
+  if (_ls) { try { _ls.setItem(key, JSON.stringify(value)); } catch {} }
+}
+
+// ══════════════════════════════════════════════════════
 //  CONTEXT
 // ══════════════════════════════════════════════════════
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
 
 function AppProvider({ children }) {
-  const [recipes,  setRecipes]  = useState(INIT_RECIPES);
-  const [meals,    setMeals]    = useState(INIT_MEALS);
-  const [shopping, setShopping] = useState([]);
-  const [cats,     setCats]     = useState(DEFAULT_CATS);
-  const [settings, setSettings] = useState({ weeksToShow: 4 });
+  const [recipes,  setRecipes]  = useState(() => loadFromStorage('mp_recipes',  INIT_RECIPES));
+  const [meals,    setMeals]    = useState(() => loadFromStorage('mp_meals',     INIT_MEALS));
+  const [shopping, setShopping] = useState(() => loadFromStorage('mp_shopping',  []));
+  const [cats,     setCats]     = useState(() => loadFromStorage('mp_cats',      DEFAULT_CATS));
+  const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4 }));
+
+  // ── Sauvegarde automatique ────────────────────────────
+  useEffect(() => saveToStorage('mp_recipes',  recipes),  [recipes]);
+  useEffect(() => saveToStorage('mp_meals',    meals),    [meals]);
+  useEffect(() => saveToStorage('mp_shopping', shopping), [shopping]);
+  useEffect(() => saveToStorage('mp_cats',     cats),     [cats]);
+  useEffect(() => saveToStorage('mp_settings', settings), [settings]);
   const [snack,    setSnack]    = useState(null);
   const snackRef = useRef(null);
 
@@ -180,7 +204,7 @@ function AppProvider({ children }) {
     setMeals(p => [...p, { id: genId(), weekKey, recipeId, persons, done: false, addedAt: ts() }]);
   };
 
-  const addIngredientsFromRecipe = (recipe, persons, selectedIngIds) => {
+  const addIngredientsFromRecipe = (recipe, persons, selectedIngIds, catOverrides = {}) => {
     const scale = persons / (recipe.portions || 4);
     const items = (recipe.ingredients || [])
       .filter(ing => selectedIngIds.includes(ing.id))
@@ -188,7 +212,7 @@ function AppProvider({ children }) {
         id: genId(), name: ing.name,
         qty:  ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0,
         unit: ing.unit || '',
-        categoryId:  categorize(ing.name, cats),
+        categoryId:  catOverrides[ing.id] ?? categorize(ing.name, cats),
         fromRecipeId: recipe.id,
         checked: false,
         sortOrder: ts() + Math.random(),
@@ -197,8 +221,21 @@ function AppProvider({ children }) {
     if (items.length) setShopping(p => [...p, ...items]);
   };
 
-  const updateMealPersons = (id, delta) =>
-    setMeals(p => p.map(m => m.id === id ? { ...m, persons: Math.max(1, m.persons + delta) } : m));
+  const updateMealPersons = (id, delta) => {
+    const meal = meals.find(m => m.id === id);
+    if (!meal) return;
+    const oldPersons = meal.persons;
+    const newPersons = Math.max(1, oldPersons + delta);
+    if (newPersons === oldPersons) return;
+    setMeals(p => p.map(m => m.id === id ? { ...m, persons: newPersons } : m));
+    // Rescale les articles de courses liés à cette recette
+    const ratio = newPersons / oldPersons;
+    setShopping(p => p.map(s =>
+      s.fromRecipeId === meal.recipeId && s.qty
+        ? { ...s, qty: Math.round(s.qty * ratio * 10) / 10 }
+        : s
+    ));
+  };
 
   const toggleMealDone = id =>
     setMeals(p => p.map(m => m.id === id ? { ...m, done: !m.done } : m));
@@ -217,11 +254,11 @@ function AppProvider({ children }) {
   };
 
   /* ── Courses ── */
-  const addShoppingItem = (name, qty, unit) =>
+  const addShoppingItem = (name, qty, unit, catId) =>
     setShopping(p => [...p, {
       id: genId(), name, qty: parseFloat(qty)||0, unit: unit||'',
-      categoryId: categorize(name, cats), fromRecipeId: null,
-      checked: false, sortOrder: ts(), addedAt: ts(),
+      categoryId: catId ?? categorize(name, cats),
+      fromRecipeId: null, checked: false, sortOrder: ts(), addedAt: ts(),
     }]);
 
   const deleteShoppingItem = id => {
@@ -246,8 +283,8 @@ function AppProvider({ children }) {
     });
 
   /* ── Catégories ── */
-  const addCat = ({ name, emoji='📦', kw=[] }) =>
-    setCats(p => [...p, { id: genId(), name, emoji, kw, order: p.length }]);
+  const addCat = ({ id = genId(), name, emoji='📦', kw=[] }) =>
+    setCats(p => [...p, { id, name, emoji, kw, order: p.length }]);
   const deleteCat = id => {
     const fb = cats.find(c => c.id !== id && (!c.kw || c.kw.length === 0))?.id ?? cats.find(c => c.id !== id)?.id;
     setCats(p => p.filter(c => c.id !== id));
@@ -332,44 +369,29 @@ function BottomSheet({ title, onClose, children }) {
   );
 }
 
-function EmojiPicker({ value, onChange }) {
-  const [open, setOpen] = useState(false);
+// Champ libre pour saisir n'importe quel emoji
+function EmojiInput({ value, onChange }) {
   return (
-    <div style={{ position:'relative' }}>
-      <button onClick={() => setOpen(o=>!o)} style={{
-        fontSize:32, background:C.border, border:'none', borderRadius:12,
-        width:60, height:60, cursor:'pointer',
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, flexShrink:0 }}>
+      <div style={{
+        fontSize:32, background:C.border, borderRadius:12,
+        width:60, height:60,
         display:'flex', alignItems:'center', justifyContent:'center',
+        userSelect:'none',
       }}>
-        {value || '🍽️'}
-      </button>
-      {open && (
-        <div style={{
-          position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
-          background:C.card, border:`1px solid ${C.border}`, borderRadius:18,
-          padding:18, zIndex:2000, width:320, maxHeight:'72vh', overflowY:'auto',
-          boxShadow:'0 24px 64px rgba(0,0,0,0.7)', animation:'fadeIn 0.15s',
-        }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
-            <span style={{ fontWeight:700, color:C.text }}>Choisir un emoji</span>
-            <button onClick={() => setOpen(false)} style={{ background:C.border, border:'none', color:C.muted, borderRadius:8, padding:'3px 10px', cursor:'pointer' }}>✕</button>
-          </div>
-          {Object.entries(FOOD_EMOJIS).map(([cat, emojis]) => (
-            <div key={cat} style={{ marginBottom:14 }}>
-              <div style={{ fontSize:11, color:C.muted, marginBottom:6, fontWeight:600 }}>{cat}</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
-                {emojis.map(e => (
-                  <button key={e} onClick={() => { onChange(e); setOpen(false); }} style={{
-                    fontSize:20, background: value===e ? C.accentBg : 'transparent',
-                    border: value===e ? `1px solid ${C.accent}` : '1px solid transparent',
-                    borderRadius:7, padding:4, cursor:'pointer', width:36, height:36,
-                  }}>{e}</button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+        {value || '📦'}
+      </div>
+      <input
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder="emoji"
+        style={{
+          width:60, textAlign:'center', fontSize:16,
+          background:C.bg, border:`1px solid ${C.border}`,
+          borderRadius:8, padding:'4px 0', color:C.text,
+          outline:'none', caretColor:C.accent,
+        }}
+      />
     </div>
   );
 }
@@ -571,7 +593,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 
   return (
     <div style={{
-      position:'fixed', inset:0, zIndex:800,
+      position:'fixed', inset:0, zIndex:1100,
       background:'rgba(0,0,0,0.65)', display:'flex',
       alignItems:'flex-end', justifyContent:'center',
     }}>
@@ -703,10 +725,11 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 //  PLANNING TAB
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
-  const { meals, recipes, addMeal, addIngredientsFromRecipe, duplicateWeek } = useApp();
+  const { meals, recipes, cats, addMeal, addIngredientsFromRecipe, duplicateWeek } = useApp();
   const [pickerWeek,  setPickerWeek]  = useState(null);
   const [dupWeek,     setDupWeek]     = useState(null);
   const [filterData,  setFilterData]  = useState(null);
+  const [multiCatData, setMultiCatData] = useState(null);
   const [btnVisible,  setBtnVisible]  = useState(false);
   const currentWeek    = getISOWeekKey();
   const currentYear    = new Date().getFullYear();
@@ -892,13 +915,43 @@ function PlanningTab() {
           }}
           onCancel={() => setFilterData(null)}
           onConfirm={(selectedByRecipe) => {
+            // Ajoute tous les repas au planning
+            filterData.selections.forEach(({ recipe, persons: p }) =>
+              addMeal(filterData.weekKey, recipe.id, p)
+            );
+            // Collecte les ingrédients sans correspondance de mot-clé
+            const uncatItems = [];
             filterData.selections.forEach(({ recipe, persons: p }) => {
-              addMeal(filterData.weekKey, recipe.id, p);
               const ids = selectedByRecipe[recipe.id] || [];
-              if (ids.length) addIngredientsFromRecipe(recipe, p, ids);
+              getUncatIngredients(recipe, ids, cats).forEach(ing =>
+                uncatItems.push({ id: ing.id, name: ing.name, recipeEmoji: recipe.emoji, recipeName: recipe.name })
+              );
             });
+            if (uncatItems.length > 0) {
+              setMultiCatData({
+                uncatItems,
+                addAll: (catOverrides) => {
+                  filterData.selections.forEach(({ recipe, persons: p }) => {
+                    const ids = selectedByRecipe[recipe.id] || [];
+                    if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides);
+                  });
+                },
+              });
+            } else {
+              filterData.selections.forEach(({ recipe, persons: p }) => {
+                const ids = selectedByRecipe[recipe.id] || [];
+                if (ids.length) addIngredientsFromRecipe(recipe, p, ids);
+              });
+            }
             setFilterData(null);
           }}
+        />
+      )}
+      {multiCatData && (
+        <MultiCategoryAssignModal
+          uncatItems={multiCatData.uncatItems}
+          onConfirm={(catOverrides) => { multiCatData.addAll(catOverrides); setMultiCatData(null); }}
+          onCancel={() => { multiCatData.addAll({}); setMultiCatData(null); }}
         />
       )}
       {dupWeek && (
@@ -1050,7 +1103,7 @@ function MealItem({ meal, recipe }) {
 function RecipePicker({ onClose, onSelect }) {
   const { recipes } = useApp();
   const [search,   setSearch]   = useState('');
-  const [persons,  setPersons]  = useState(4);
+  const [persons,  setPersons]  = useState(6);
   const [selected, setSelected] = useState(new Set()); // multi-sélection
 
   const toggle = id => setSelected(s => {
@@ -1157,7 +1210,7 @@ function RecipesTab() {
   const { recipes, addRecipe, updateRecipe, deleteRecipe } = useApp();
   const [search,      setSearch]      = useState('');
   const [filterFav,   setFilterFav]   = useState(false);
-  const [filterTag,   setFilterTag]   = useState('');
+  const [filterTags,  setFilterTags]  = useState([]);
   const [filterOpen,  setFilterOpen]  = useState(false);
   const [detailId,    setDetailId]    = useState(null);
   const [editRec,     setEditRec]     = useState(null);
@@ -1166,11 +1219,11 @@ function RecipesTab() {
     const s = new Set(); recipes.forEach(r => (r.tags||[]).forEach(t => s.add(t))); return [...s];
   }, [recipes]);
 
-  const activeFilters = (filterFav ? 1 : 0) + (filterTag ? 1 : 0);
+  const activeFilters = (filterFav ? 1 : 0) + filterTags.length;
 
   const filtered = recipes.filter(r =>
     (!filterFav || r.favorite) &&
-    (!filterTag || (r.tags||[]).includes(filterTag)) &&
+    (!filterTags.length || (r.tags||[]).some(t => filterTags.includes(t))) &&
     (!search    || r.name.toLowerCase().includes(search.toLowerCase()))
   );
 
@@ -1228,7 +1281,7 @@ function RecipesTab() {
         <FilterModal
           onClose={() => setFilterOpen(false)}
           filterFav={filterFav} setFilterFav={setFilterFav}
-          filterTag={filterTag} setFilterTag={setFilterTag}
+          filterTags={filterTags} setFilterTags={setFilterTags}
           allTags={allTags}
         />
       )}
@@ -1254,8 +1307,19 @@ function RecipesTab() {
   );
 }
 
-function FilterModal({ onClose, filterFav, setFilterFav, filterTag, setFilterTag, allTags }) {
-  const activeCount = (filterFav ? 1 : 0) + (filterTag ? 1 : 0);
+function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTags, allTags }) {
+  const [tagSearch, setTagSearch] = useState('');
+  const activeCount = (filterFav ? 1 : 0) + filterTags.length;
+
+  const toggleTag = (t) =>
+    setFilterTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+
+  const visibleTags = tagSearch
+    ? allTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase()))
+    : allTags;
+
+  const inp = { padding:'8px 11px', background:'#111419', border:`1px solid #2A3040`, borderRadius:9, color:'#E8EAF2', fontSize:13, outline:'none', width:'100%' };
+
   return (
     <BottomSheet title="Filtrer les recettes" onClose={onClose}>
       <div style={{ padding:16 }}>
@@ -1271,22 +1335,44 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTag, setFilterTag
         </div>
 
         {allTags.length > 0 && (<>
-          <SecTitle>Tags</SecTitle>
+          <SecTitle>
+            Tags
+            {filterTags.length > 0 && (
+              <span style={{ marginLeft:8, background:C.accentBg, color:C.accent, fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:20, border:`1px solid ${C.accent}44`, verticalAlign:'middle' }}>
+                {filterTags.length} sélectionné{filterTags.length > 1 ? 's' : ''}
+              </span>
+            )}
+          </SecTitle>
+          <input
+            value={tagSearch}
+            onChange={e => setTagSearch(e.target.value)}
+            placeholder="Rechercher un tag..."
+            style={{ ...inp, marginBottom:10 }}
+          />
           <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
-            {allTags.map(t => (
-              <button key={t} onClick={() => setFilterTag(filterTag===t?'':t)} style={{
-                background: filterTag===t ? C.accentBg : C.border,
-                color: filterTag===t ? C.accent : C.muted,
-                border: filterTag===t ? `1px solid ${C.accent}44` : '1px solid transparent',
-                padding:'6px 14px', borderRadius:20, fontSize:12, cursor:'pointer',
-                fontWeight: filterTag===t ? 700 : 400,
-              }}>{t}</button>
-            ))}
+            {visibleTags.map(t => {
+              const active = filterTags.includes(t);
+              return (
+                <button key={t} onClick={() => toggleTag(t)} style={{
+                  background: active ? C.accentBg : C.border,
+                  color: active ? C.accent : C.muted,
+                  border: active ? `1px solid ${C.accent}44` : '1px solid transparent',
+                  padding:'6px 14px', borderRadius:20, fontSize:12, cursor:'pointer',
+                  fontWeight: active ? 700 : 400,
+                }}>
+                  {active && <span style={{ marginRight:4 }}>✓</span>}
+                  {t}
+                </button>
+              );
+            })}
+            {visibleTags.length === 0 && (
+              <span style={{ fontSize:12, color:C.muted }}>Aucun tag trouvé</span>
+            )}
           </div>
         </>)}
 
         {activeCount > 0 && (
-          <button onClick={() => { setFilterFav(false); setFilterTag(''); }} style={{
+          <button onClick={() => { setFilterFav(false); setFilterTags([]); }} style={{
             width:'100%', padding:'10px', background:C.redBg, color:C.red,
             border:`1px solid ${C.red}33`, borderRadius:10, cursor:'pointer', fontSize:13, marginBottom:8,
           }}>✕ Effacer les filtres</button>
@@ -1298,54 +1384,91 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTag, setFilterTag
 }
 
 function AssignToWeekModal({ recipe, viewPortions, onClose }) {
-  const { addMeal } = useApp();
+  const { addMeal, addIngredientsFromRecipe, cats } = useApp();
   const currentWeek = getISOWeekKey();
-  const [selWeek, setSelWeek]   = useState(currentWeek);
-  const [persons, setPersons]   = useState(viewPortions || recipe.portions || 4);
-  const [done,    setDone]      = useState(false);
+  const [selWeek,      setSelWeek]      = useState(currentWeek);
+  const [persons,      setPersons]      = useState(viewPortions || 6);
+  const [done,         setDone]         = useState(false);
+  const [filterOpen,   setFilterOpen]   = useState(false);
+  const [multiCatData, setMultiCatData] = useState(null);
   const weeks = [];
   for (let i = 0; i < 8; i++) weeks.push(shiftWeek(currentWeek, i));
 
-  const handle = () => {
+  const doAdd = (ingredientIds = null, catOverrides = {}) => {
     addMeal(selWeek, recipe.id, persons);
+    if (ingredientIds?.length) addIngredientsFromRecipe(recipe, persons, ingredientIds, catOverrides);
     setDone(true);
     setTimeout(onClose, 900);
   };
 
+  const handleIngredientConfirm = (ingredientIds) => {
+    const uncat = getUncatIngredients(recipe, ingredientIds, cats);
+    if (uncat.length > 0) {
+      setMultiCatData({
+        uncatItems: uncat.map(ing => ({ id: ing.id, name: ing.name, recipeEmoji: recipe.emoji })),
+        ingredientIds,
+      });
+    } else {
+      doAdd(ingredientIds);
+    }
+  };
+
+  const handle = () => {
+    if (recipe.ingredients?.length > 0) setFilterOpen(true);
+    else doAdd();
+  };
+
   return (
-    <BottomSheet title={`Affecter au planning`} onClose={onClose}>
-      <div style={{ padding:16 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:14,
-          background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:'10px 14px',
-        }}>
-          <span style={{ fontSize:22 }}>{recipe.emoji}</span>
-          <span style={{ fontWeight:600, color:C.text, fontSize:14, marginLeft:6, flex:1 }}>{recipe.name}</span>
-        </div>
-        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
-          <span style={{ color:C.muted, fontSize:13, flex:1 }}>👥 Personnes</span>
-          <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
-          <span style={{ fontWeight:700, color:C.text, minWidth:24, textAlign:'center' }}>{persons}</span>
-          <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
-        </div>
-        <SecTitle>Semaine</SecTitle>
-        {weeks.map(w => (
-          <div key={w} onClick={() => setSelWeek(w)} style={{
-            padding:'9px 14px', borderRadius:10, marginBottom:5, cursor:'pointer',
-            background: selWeek===w ? C.accentBg : C.bg,
-            border:`1px solid ${selWeek===w ? C.accent+'55' : C.border}`,
+    <>
+      <BottomSheet title="Affecter au planning" onClose={onClose}>
+        <div style={{ padding:16 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:14,
+            background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:'10px 14px',
           }}>
-            <span style={{ fontWeight:500, color: w===currentWeek ? C.accent : C.text, fontSize:13 }}>
-              {w===currentWeek ? '📅 ' : ''}S{w.split('-W')[1]}
-            </span>
-            <span style={{ fontSize:11, color:C.muted, marginLeft:8 }}>{getWeekRange(w)}</span>
+            <span style={{ fontSize:22 }}>{recipe.emoji}</span>
+            <span style={{ fontWeight:600, color:C.text, fontSize:14, marginLeft:6, flex:1 }}>{recipe.name}</span>
           </div>
-        ))}
-        {done
-          ? <div style={{ textAlign:'center', color:C.green, fontSize:14, fontWeight:600, marginTop:12 }}>✅ Ajouté !</div>
-          : <Btn onClick={handle} variant="primary" style={{ width:'100%', justifyContent:'center', marginTop:10 }}>Ajouter au planning</Btn>
-        }
-      </div>
-    </BottomSheet>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+            <span style={{ color:C.muted, fontSize:13, flex:1 }}>👥 Personnes</span>
+            <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
+            <span style={{ fontWeight:700, color:C.text, minWidth:24, textAlign:'center' }}>{persons}</span>
+            <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
+          </div>
+          <SecTitle>Semaine</SecTitle>
+          {weeks.map(w => (
+            <div key={w} onClick={() => setSelWeek(w)} style={{
+              padding:'9px 14px', borderRadius:10, marginBottom:5, cursor:'pointer',
+              background: selWeek===w ? C.accentBg : C.bg,
+              border:`1px solid ${selWeek===w ? C.accent+'55' : C.border}`,
+            }}>
+              <span style={{ fontWeight:500, color: w===currentWeek ? C.accent : C.text, fontSize:13 }}>
+                {w===currentWeek ? '📅 ' : ''}S{w.split('-W')[1]}
+              </span>
+              <span style={{ fontSize:11, color:C.muted, marginLeft:8 }}>{getWeekRange(w)}</span>
+            </div>
+          ))}
+          {done
+            ? <div style={{ textAlign:'center', color:C.green, fontSize:14, fontWeight:600, marginTop:12 }}>✅ Ajouté !</div>
+            : <Btn onClick={handle} variant="primary" style={{ width:'100%', justifyContent:'center', marginTop:10 }}>Ajouter au planning</Btn>
+          }
+        </div>
+      </BottomSheet>
+      {filterOpen && (
+        <IngredientFilterModal
+          selections={[{ recipe, persons }]}
+          onConfirm={selectedByRecipe => handleIngredientConfirm(selectedByRecipe[recipe.id] || [])}
+          onSkip={() => doAdd()}
+          onCancel={() => setFilterOpen(false)}
+        />
+      )}
+      {multiCatData && (
+        <MultiCategoryAssignModal
+          uncatItems={multiCatData.uncatItems}
+          onConfirm={(catOverrides) => { doAdd(multiCatData.ingredientIds, catOverrides); setMultiCatData(null); }}
+          onCancel={() => { doAdd(multiCatData.ingredientIds); setMultiCatData(null); }}
+        />
+      )}
+    </>
   );
 }
 
@@ -1855,6 +1978,7 @@ function parseHtml(html) {
 }
 
 function RecipeEditor({ recipe, onClose, onSave }) {
+  const { recipes } = useApp();
   const [form, setForm] = useState({
     ...recipe,
     tagsStr: (recipe.tags||[]).join(', '),
@@ -1870,6 +1994,19 @@ function RecipeEditor({ recipe, onClose, onSave }) {
   const [importMode,  setImportMode]  = useState('url');   // 'url' | 'paste'
   const [pasteText,   setPasteText]   = useState('');
   const [importStep,  setImportStep]  = useState('');
+  const [dupWarning,  setDupWarning]  = useState(null); // recette existante en doublon
+
+  // Détecte un doublon par URL exacte ou par nom identique (hors modification d'une recette existante)
+  const checkDuplicate = (url, name) => {
+    const u = url?.trim();
+    const n = name?.trim().toLowerCase();
+    return recipes.find(r =>
+      r.id !== recipe.id && (
+        (u && r.url?.trim() === u) ||
+        (n && r.name.trim().toLowerCase() === n)
+      )
+    ) || null;
+  };
 
   // ── Étape 1 : Jow (API officielle) ────────────────
   const fetchJow = async (url) => {
@@ -1981,15 +2118,25 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         }
       }
 
-      const scaled = applyScale(raw);
+      const scaled         = applyScale(raw);
+      const newPortions    = 6;
+      const newIngredients = scaled.ingredients.length ? scaled.ingredients : form.ingredients;
+      // Réinitialise la base de référence pour le recalcul des portions
+      portionsBaseRef.current = {
+        portions:    newPortions,
+        ingredients: newIngredients.map(i => ({ id: i.id, qty: parseFloat(i.qty) || 0 })),
+      };
+      // Détection de doublon après import
+      const dup = checkDuplicate(importMode === 'url' ? importUrl.trim() : '', scaled.name || '');
+      setDupWarning(dup);
       setForm(f => ({
         ...f,
         name:            scaled.name || f.name,
         emoji:           guessEmoji(scaled.name || f.name),
-        portions:        6,
+        portions:        newPortions,
         cookTimeMinutes: scaled.cookTimeMinutes || 0,
         tagsStr:         (scaled.tags || []).join(', '),
-        ingredients:     scaled.ingredients.length ? scaled.ingredients : f.ingredients,
+        ingredients:     newIngredients,
         steps:           (scaled.steps || []).filter(s => s?.trim()),
         note:            scaled.note || '',
         url:             importMode === 'url' ? importUrl.trim() : f.url,
@@ -2017,10 +2164,45 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
     }
   };
 
+  // ── Base de référence pour le recalcul des portions ──
+  const portionsBaseRef = useRef({
+    portions:    parseInt(recipe.portions) || 1,
+    ingredients: (recipe.ingredients || []).map(i => ({ id: i.id, qty: parseFloat(i.qty) || 0 })),
+  });
+
+  const adjustPortions = (delta) => {
+    setForm(f => {
+      const newP = Math.max(1, parseInt(f.portions) + delta);
+      const base = portionsBaseRef.current;
+      if (!base || !base.portions) return { ...f, portions: newP };
+      const ratio = newP / base.portions;
+      return {
+        ...f, portions: newP,
+        ingredients: f.ingredients.map(ing => {
+          const b = base.ingredients.find(x => x.id === ing.id);
+          const bQty = b !== undefined ? b.qty : parseFloat(ing.qty) || 0;
+          const scaled = bQty ? Math.round(bQty * ratio * 10) / 10 : 0;
+          return { ...ing, qty: scaled || ing.qty };
+        }),
+      };
+    });
+  };
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const addIng  = () => set('ingredients', [...form.ingredients, { id:genId(), name:'', qty:'', unit:'' }]);
   const remIng  = id => set('ingredients', form.ingredients.filter(i => i.id !== id));
-  const updIng  = (id,k,v) => set('ingredients', form.ingredients.map(i => i.id===id?{...i,[k]:v}:i));
+  const updIng  = (id, k, v) => {
+    set('ingredients', form.ingredients.map(i => i.id===id ? {...i,[k]:v} : i));
+    // Si l'utilisateur édite une quantité manuellement, on met à jour la base de référence
+    if (k === 'qty') {
+      portionsBaseRef.current = {
+        ...portionsBaseRef.current,
+        ingredients: portionsBaseRef.current.ingredients.map(x =>
+          x.id === id ? { ...x, qty: parseFloat(v) || 0 } : x
+        ),
+      };
+    }
+  };
   const addStep = () => set('steps', [...form.steps, '']);
   const remStep = i => set('steps', form.steps.filter((_,j) => j !== i));
   const updStep = (i,v) => set('steps', form.steps.map((s,j) => j===i?v:s));
@@ -2048,7 +2230,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
       }}>
         <Btn onClick={onClose} small>Annuler</Btn>
         <span style={{ fontWeight:700, color:C.text }}>{form.id ? 'Modifier la recette' : 'Nouvelle recette'}</span>
-        <Btn onClick={handleSave} variant="primary" small disabled={!form.name.trim()}>Enregistrer</Btn>
+        <Btn onClick={handleSave} variant="primary" small disabled={!form.name.trim() || !!dupWarning}>Enregistrer</Btn>
       </div>
 
       <div style={{ padding:20 }}>
@@ -2138,9 +2320,37 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
           </div>
         )}
 
+        {/* ══ Bandeau doublon ══ */}
+        {dupWarning && (
+          <div style={{
+            background: C.orangeBg, border:`1px solid ${C.orange}44`,
+            borderRadius:13, padding:14, marginBottom:18, animation:'fadeIn 0.2s',
+          }}>
+            <div style={{ fontSize:13, color:C.orange, fontWeight:700, marginBottom:6 }}>
+              ⚠️ Cette recette existe déjà
+            </div>
+            <div style={{ fontSize:12, color:C.soft, marginBottom:12 }}>
+              {dupWarning.emoji} <strong style={{ color:C.text }}>{dupWarning.name}</strong> est déjà dans ta liste.
+              Choisis une action pour pouvoir enregistrer.
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={() => { set('id', dupWarning.id); setDupWarning(null); }} style={{
+                flex:1, padding:'8px 10px', borderRadius:9, border:`1px solid ${C.orange}55`,
+                background:'rgba(232,168,123,0.18)', color:C.orange,
+                fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+              }}>↻ Mettre à jour "{dupWarning.name}"</button>
+              <button onClick={() => setDupWarning(null)} style={{
+                flex:1, padding:'8px 10px', borderRadius:9, border:`1px solid ${C.border}`,
+                background:'transparent', color:C.soft,
+                fontSize:12, cursor:'pointer', fontFamily:'inherit',
+              }}>+ Créer quand même</button>
+            </div>
+          </div>
+        )}
+
         {/* ══ Emoji & Nom ══ */}
         <div style={{ display:'flex', gap:14, alignItems:'flex-start', marginBottom:18 }}>
-          <EmojiPicker value={form.emoji} onChange={v => set('emoji', v)} />
+          <EmojiInput value={form.emoji} onChange={v => set('emoji', v)} />
           <div style={{ flex:1 }}>
             <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom *</label>
             <input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Nom de la recette" style={inp} />
@@ -2150,7 +2360,19 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:16 }}>
           <div>
             <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🍽 Portions</label>
-            <input type="number" min="1" value={form.portions} onChange={e=>set('portions',e.target.value)} style={inp} />
+            <div style={{ display:'flex', alignItems:'center', gap:8, height:36 }}>
+              <button onClick={() => adjustPortions(-1)} style={{
+                background:C.border, border:'none', color:C.text, width:32, height:32,
+                borderRadius:8, cursor:'pointer', fontSize:18, flexShrink:0, lineHeight:1,
+              }}>−</button>
+              <span style={{ fontWeight:700, color:C.text, minWidth:28, textAlign:'center', fontSize:16 }}>
+                {parseInt(form.portions)||1}
+              </span>
+              <button onClick={() => adjustPortions(1)} style={{
+                background:C.border, border:'none', color:C.text, width:32, height:32,
+                borderRadius:8, cursor:'pointer', fontSize:18, flexShrink:0, lineHeight:1,
+              }}>+</button>
+            </div>
           </div>
           <div>
             <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>⏱ Durée (min)</label>
@@ -2215,6 +2437,221 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         </div>
       </div>
     </div>
+  );
+}
+
+function MultiCategoryAssignModal({ uncatItems, onConfirm, onCancel }) {
+  // uncatItems : [{ id, name, recipeEmoji, recipeName }]
+  const { cats, addCat } = useApp();
+  const sortedCats = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
+  const [assignments, setAssignments] = useState({});
+  const [bulkCat,     setBulkCat]     = useState('');
+  const [creating,    setCreating]    = useState(false);
+  const [newName,     setNewName]     = useState('');
+  const [newEmoji,    setNewEmoji]    = useState('📦');
+
+  // Après création d'une catégorie, elle apparaît dans sortedCats via context —
+  // on la sélectionne automatiquement comme bulk
+  const prevCatCount = useRef(cats.length);
+  useEffect(() => {
+    if (cats.length > prevCatCount.current) {
+      const newest = [...cats].sort((a,b) => b.order-a.order)[0];
+      if (newest) setBulkCat(newest.id);
+    }
+    prevCatCount.current = cats.length;
+  }, [cats]);
+
+  const allAssigned = uncatItems.every(i => assignments[i.id]);
+  const inp = { padding:'7px 10px', background:'#111419', border:`1px solid #2A3040`, borderRadius:8, color:'#E8EAF2', fontSize:12, outline:'none' };
+
+  const applyBulk = () => {
+    if (!bulkCat) return;
+    const all = {};
+    uncatItems.forEach(i => { all[i.id] = bulkCat; });
+    setAssignments(all);
+  };
+
+  const handleCreateAndSelect = () => {
+    if (!newName.trim()) return;
+    const newId = genId();
+    addCat({ id: newId, name: newName.trim(), emoji: newEmoji, kw: [] });
+    setBulkCat(newId);
+    setCreating(false);
+    setNewName(''); setNewEmoji('📦');
+    // Bulk-apply immédiatement
+    const all = {};
+    uncatItems.forEach(i => { all[i.id] = newId; });
+    setAssignments(all);
+  };
+
+  return (
+    <BottomSheet title="Catégoriser les ingrédients" onClose={onCancel}>
+      <div style={{ padding:16 }}>
+        <div style={{ fontSize:12, color:C.muted, marginBottom:14 }}>
+          {uncatItems.length} ingrédient{uncatItems.length>1?'s':''} sans correspondance — choisis une catégorie pour chacun.
+        </div>
+
+        {/* Bulk assign */}
+        <div style={{ display:'flex', gap:8, marginBottom:14, alignItems:'center' }}>
+          <select value={bulkCat} onChange={e=>setBulkCat(e.target.value)}
+            style={{ ...inp, flex:1 }}>
+            <option value="">Tout mettre dans...</option>
+            {sortedCats.map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+          </select>
+          <button onClick={applyBulk} disabled={!bulkCat} style={{
+            padding:'7px 12px', borderRadius:8, border:'none', cursor: bulkCat?'pointer':'default',
+            background: bulkCat ? C.accentDk : C.border, color: bulkCat?'#fff':C.muted,
+            fontSize:12, fontWeight:600, fontFamily:'inherit', flexShrink:0,
+          }}>Appliquer</button>
+        </div>
+
+        {/* Créer une catégorie */}
+        {!creating ? (
+          <button onClick={() => setCreating(true)} style={{
+            width:'100%', padding:'8px', borderRadius:9, marginBottom:14,
+            border:`1px dashed ${C.accent}55`, background:C.accentBg,
+            color:C.accent, fontSize:12, cursor:'pointer', fontFamily:'inherit',
+          }}>+ Créer une nouvelle catégorie</button>
+        ) : (
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:12, marginBottom:14 }}>
+            <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+              <EmojiInput value={newEmoji} onChange={setNewEmoji} />
+              <input value={newName} onChange={e=>setNewName(e.target.value)}
+                placeholder="Nom de la catégorie" autoFocus
+                style={{ ...inp, flex:1, fontSize:13 }} />
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={() => { setCreating(false); setNewName(''); }} style={{
+                flex:1, padding:'7px', borderRadius:8, border:`1px solid ${C.border}`,
+                background:'transparent', color:C.muted, fontSize:12, cursor:'pointer', fontFamily:'inherit',
+              }}>Annuler</button>
+              <button onClick={handleCreateAndSelect} disabled={!newName.trim()} style={{
+                flex:2, padding:'7px', borderRadius:8, border:'none',
+                background: newName.trim() ? C.accentDk : C.border,
+                color: newName.trim() ? '#fff' : C.muted,
+                fontSize:12, fontWeight:600, cursor: newName.trim()?'pointer':'default', fontFamily:'inherit',
+              }}>Créer et assigner à tous</button>
+            </div>
+          </div>
+        )}
+
+        {/* Par ingrédient */}
+        <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:16 }}>
+          {uncatItems.map(item => (
+            <div key={item.id} style={{
+              display:'flex', alignItems:'center', gap:8,
+              background:C.card, border:`1px solid ${assignments[item.id] ? C.accent+'44' : C.border}`,
+              borderRadius:9, padding:'8px 10px',
+            }}>
+              {item.recipeEmoji && <span style={{ fontSize:13, flexShrink:0 }}>{item.recipeEmoji}</span>}
+              <span style={{ flex:1, fontSize:13, color:C.text }}>{item.name}</span>
+              <select value={assignments[item.id] || ''} onChange={e => setAssignments(p => ({ ...p, [item.id]: e.target.value }))}
+                style={{ ...inp, width:120, flexShrink:0 }}>
+                <option value="">— catégorie —</option>
+                {sortedCats.map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+
+        <Btn onClick={() => onConfirm(assignments)} variant="primary"
+          disabled={!allAssigned} style={{ width:'100%', justifyContent:'center' }}>
+          Ajouter {uncatItems.length} ingrédient{uncatItems.length>1?'s':''} ✓
+        </Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function CategoryAssignModal({ item, onConfirm, onCancel }) {
+  const { cats, addCat } = useApp();
+  const sortedCats = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
+  const [creating,  setCreating]  = useState(false);
+  const [newName,   setNewName]   = useState('');
+  const [newEmoji,  setNewEmoji]  = useState('📦');
+
+  const inp = { padding:'8px 11px', background:'#111419', border:`1px solid #2A3040`, borderRadius:9, color:'#E8EAF2', fontSize:13, outline:'none' };
+
+  const handleCreateAndAdd = () => {
+    if (!newName.trim()) return;
+    const newId = genId();
+    addCat({ id: newId, name: newName.trim(), emoji: newEmoji, kw: [] });
+    onConfirm(newId);
+  };
+
+  return (
+    <BottomSheet title="Choisir une catégorie" onClose={onCancel}>
+      <div style={{ padding:16 }}>
+        {/* Article en attente */}
+        <div style={{
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:11,
+          padding:'10px 14px', marginBottom:16, display:'flex', alignItems:'center', gap:10,
+        }}>
+          <span style={{ fontSize:20 }}>🛒</span>
+          <div>
+            <div style={{ fontWeight:600, color:C.text, fontSize:14 }}>{item.name}</div>
+            {(item.qty || item.unit) && (
+              <div style={{ fontSize:12, color:C.muted }}>{item.qty} {item.unit}</div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ fontSize:12, color:C.muted, marginBottom:10, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>
+          Aucun mot-clé ne correspond — assigne à une catégorie :
+        </div>
+
+        {/* Catégories existantes */}
+        <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:14 }}>
+          {sortedCats.map(cat => (
+            <button key={cat.id} onClick={() => onConfirm(cat.id)} style={{
+              display:'flex', alignItems:'center', gap:10,
+              padding:'10px 14px', borderRadius:10, cursor:'pointer',
+              background:C.card, border:`1px solid ${C.border}`,
+              color:C.text, fontSize:13, fontFamily:'inherit', textAlign:'left',
+            }}>
+              <span style={{ fontSize:18 }}>{cat.emoji}</span>
+              <span style={{ flex:1 }}>{cat.name}</span>
+              <span style={{ color:C.muted, fontSize:11 }}>→</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Créer nouvelle catégorie */}
+        {!creating ? (
+          <button onClick={() => setCreating(true)} style={{
+            width:'100%', padding:'10px', borderRadius:10,
+            border:`1px dashed ${C.accent}55`, background:C.accentBg,
+            color:C.accent, fontSize:13, cursor:'pointer', fontFamily:'inherit',
+          }}>+ Créer une nouvelle catégorie</button>
+        ) : (
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:14 }}>
+            <div style={{ fontSize:12, color:C.muted, fontWeight:600, marginBottom:10, textTransform:'uppercase' }}>
+              Nouvelle catégorie
+            </div>
+            <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:10 }}>
+              <EmojiInput value={newEmoji} onChange={setNewEmoji} />
+              <input value={newName} onChange={e=>setNewName(e.target.value)}
+                placeholder="Nom de la catégorie" autoFocus
+                style={{ ...inp, flex:1 }}
+              />
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={() => setCreating(false)} style={{
+                flex:1, padding:'8px', borderRadius:9, border:`1px solid ${C.border}`,
+                background:'transparent', color:C.muted, fontSize:12, cursor:'pointer', fontFamily:'inherit',
+              }}>Annuler</button>
+              <button onClick={handleCreateAndAdd} disabled={!newName.trim()} style={{
+                flex:2, padding:'8px', borderRadius:9, border:'none',
+                background: newName.trim() ? C.accentDk : C.border,
+                color: newName.trim() ? '#fff' : C.muted,
+                fontSize:12, fontWeight:600,
+                cursor: newName.trim() ? 'pointer' : 'default', fontFamily:'inherit',
+              }}>Créer et ajouter</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </BottomSheet>
   );
 }
 
@@ -2296,10 +2733,20 @@ function ShoppingTab() {
     dragRef.current = { type:null, id:null, catId:null };
   };
 
+  const [catAssignItem, setCatAssignItem] = useState(null); // { name, qty, unit }
+
   const handleAdd = () => {
     if (!newName.trim()) return;
-    addShoppingItem(newName.trim(), newQty, newUnit);
-    setNewName(''); setNewQty(''); setNewUnit('');
+    const name = newName.trim();
+    const hasKeywordMatch = cats.some(c =>
+      c.kw?.length > 0 && c.kw.some(k => name.toLowerCase().includes(k.toLowerCase()))
+    );
+    if (!hasKeywordMatch) {
+      setCatAssignItem({ name, qty: newQty, unit: newUnit });
+    } else {
+      addShoppingItem(name, newQty, newUnit);
+      setNewName(''); setNewQty(''); setNewUnit('');
+    }
   };
 
   const shareList = () => {
@@ -2393,6 +2840,40 @@ function ShoppingTab() {
           />
         );
       })}
+
+      {/* ── Articles sans catégorie valide (filet de sécurité) ── */}
+      {(() => {
+        const orphans = shopping.filter(s => !cats.find(c => c.id === s.categoryId));
+        if (!orphans.length) return null;
+        return (
+          <div style={{ marginBottom:7, borderRadius:10, overflow:'hidden', border:`1px dashed ${C.orange}66` }}>
+            <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background:C.orangeBg }}>
+              <span style={{ fontSize:15 }}>⚠️</span>
+              <span style={{ fontWeight:600, fontSize:12, color:C.orange, flex:1 }}>Non catégorisé</span>
+              <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:C.orange, padding:'1px 7px', borderRadius:20 }}>{orphans.length}</span>
+            </div>
+            <div style={{ background:C.bg }}>
+              {orphans.map(item => (
+                <ItemRow key={item.id} item={item} isDragOver={false}
+                  onDragStart={()=>{}} onDragOver={()=>{}} onDrop={()=>{}} onDragEnd={()=>{}}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {catAssignItem && (
+        <CategoryAssignModal
+          item={catAssignItem}
+          onConfirm={(catId) => {
+            addShoppingItem(catAssignItem.name, catAssignItem.qty, catAssignItem.unit, catId);
+            setNewName(''); setNewQty(''); setNewUnit('');
+            setCatAssignItem(null);
+          }}
+          onCancel={() => setCatAssignItem(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2903,7 +3384,8 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>1.8.0</span> — Planning annuel · compacité · multi-ajout<br/>
             <span style={{ color:C.accent }}>1.9.0</span> — Import recettes depuis sites web<br/>
             <span style={{ color:C.accent }}>2.0.0</span> — IngredientParser · EmojiGuesser · Jow API<br/>
-            <span style={{ color:C.accent }}>2.1.0</span> — Édition catégories · Export/Import JSON
+            <span style={{ color:C.accent }}>2.1.0</span> — Édition catégories · Export/Import JSON<br/>
+            <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre
           </div>
         </div>
       </div>
@@ -2936,7 +3418,7 @@ function CategoryEditModal({ cat, onClose }) {
     <BottomSheet title={`Modifier la catégorie`} onClose={onClose}>
       <div style={{ padding:16 }}>
         <div style={{ display:'flex', gap:12, alignItems:'flex-start', marginBottom:16 }}>
-          <EmojiPicker value={emoji} onChange={setEmoji} />
+          <EmojiInput value={emoji} onChange={setEmoji} />
           <div style={{ flex:1 }}>
             <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom</label>
             <input value={name} onChange={e=>setName(e.target.value)} style={inp} />
@@ -2979,7 +3461,7 @@ function CategoryAddModal({ onClose }) {
     <BottomSheet title="Nouvelle catégorie" onClose={onClose}>
       <div style={{ padding:16 }}>
         <div style={{ display:'flex', gap:12, alignItems:'flex-start', marginBottom:16 }}>
-          <EmojiPicker value={emoji} onChange={setEmoji} />
+          <EmojiInput value={emoji} onChange={setEmoji} />
           <div style={{ flex:1 }}>
             <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom *</label>
             <input value={name} onChange={e=>setName(e.target.value)}
