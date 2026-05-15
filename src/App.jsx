@@ -2739,6 +2739,15 @@ function ShoppingTab() {
     dragRef.current = { type:null, id:null, catId:null };
   };
 
+  const moveCatInShopping = (id, dir) => {
+    const list = [...cats].sort((a,b) => a.order - b.order);
+    const idx  = list.findIndex(c => c.id === id);
+    const next = idx + dir;
+    if (next < 0 || next >= list.length) return;
+    [list[idx], list[next]] = [list[next], list[idx]];
+    reorderCats(list);
+  };
+
   const [catAssignItem, setCatAssignItem] = useState(null); // { name, qty, unit }
 
   const handleAdd = () => {
@@ -2843,6 +2852,8 @@ function ShoppingTab() {
             onCatDrop={e => onCatDrop(e, cat.id)}
             onCatDragEnd={onCatDragEnd}
             dragRef={dragRef}
+            onMoveUp={idx > 0 ? () => moveCatInShopping(cat.id, -1) : null}
+            onMoveDown={idx < sortedCats.length - 1 ? () => moveCatInShopping(cat.id, +1) : null}
           />
         );
       })}
@@ -2884,7 +2895,7 @@ function ShoppingTab() {
   );
 }
 
-function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onCatDragOver, onCatDrop, onCatDragEnd, dragRef }) {
+function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onCatDragOver, onCatDrop, onCatDragEnd, dragRef, onMoveUp, onMoveDown }) {
   const { reorderItemsInCat } = useApp();
   const [open, setOpen] = useState(true);
   const [dragOverItem, setDragOverItem] = useState(null);
@@ -2957,6 +2968,21 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
           }}>{items.length}</span>
           <span style={{ color:C.muted, fontSize:10 }}>{open?'▲':'▼'}</span>
         </span>
+        {/* Boutons de réordonnancement */}
+        <div style={{ display:'flex', flexDirection:'column', gap:1, flexShrink:0, marginLeft:4 }}>
+          <button onPointerDown={e => { e.stopPropagation(); onMoveUp?.(); }} style={{
+            background: onMoveUp ? C.border : 'transparent', border:'none',
+            color: onMoveUp ? C.soft : C.border, borderRadius:4,
+            width:22, height:18, fontSize:10, cursor: onMoveUp ? 'pointer' : 'default',
+            lineHeight:1, padding:0, fontFamily:'inherit',
+          }}>▲</button>
+          <button onPointerDown={e => { e.stopPropagation(); onMoveDown?.(); }} style={{
+            background: onMoveDown ? C.border : 'transparent', border:'none',
+            color: onMoveDown ? C.soft : C.border, borderRadius:4,
+            width:22, height:18, fontSize:10, cursor: onMoveDown ? 'pointer' : 'default',
+            lineHeight:1, padding:0, fontFamily:'inherit',
+          }}>▼</button>
+        </div>
       </div>
 
       {/* Articles */}
@@ -3281,25 +3307,12 @@ function SettingsTab() {
   const sorted = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
 
   const moveCat = (id, dir) => {
-    const list = [...sorted];
+    const list = [...cats].sort((a,b) => a.order - b.order);
     const idx  = list.findIndex(c => c.id === id);
     const next = idx + dir;
     if (next < 0 || next >= list.length) return;
     [list[idx], list[next]] = [list[next], list[idx]];
     reorderCats(list);
-  };
-  const [dragCat,     setDragCat]     = useState(null);
-  const [dragOverCat, setDragOverCat] = useState(null);
-  const onCatDragEnd = () => {
-    if (dragCat && dragOverCat && dragCat !== dragOverCat) {
-      const list    = [...sorted];
-      const fromIdx = list.findIndex(c => c.id === dragCat);
-      const toIdx   = list.findIndex(c => c.id === dragOverCat);
-      const [item]  = list.splice(fromIdx, 1);
-      list.splice(toIdx, 0, item);
-      reorderCats(list);
-    }
-    setDragCat(null); setDragOverCat(null);
   };
 
   // ── Export JSON ──────────────────────────────────────
@@ -3360,22 +3373,11 @@ function SettingsTab() {
       <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:'4px 0', marginBottom:16 }}>
         {sorted.map((cat, idx) => (
           <div key={cat.id}
-            draggable
-            onDragStart={() => setDragCat(cat.id)}
-            onDragEnter={() => setDragOverCat(cat.id)}
-            onDragEnd={onCatDragEnd}
-            onDragOver={e => e.preventDefault()}
             style={{
               display:'flex', alignItems:'center', gap:8, padding:'9px 12px',
               borderBottom: idx<sorted.length-1 ? `1px solid ${C.border}` : 'none',
-              background: dragOverCat===cat.id && dragCat!==cat.id ? C.accentBg : 'transparent',
-              opacity: dragCat===cat.id ? 0.45 : 1,
-              transition:'background 0.1s',
             }}>
-            {/* Numéro */}
             <span style={{ fontSize:11, color:C.muted, minWidth:16, textAlign:'right', flexShrink:0 }}>{idx+1}</span>
-            {/* Poignée drag */}
-            <span style={{ color:C.muted, fontSize:15, cursor:'grab', flexShrink:0 }}>≡</span>
             <span style={{ fontSize:20, flexShrink:0 }}>{cat.emoji}</span>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontWeight:500, color:C.text, fontSize:13 }}>{cat.name}</div>
