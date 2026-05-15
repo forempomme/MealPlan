@@ -84,11 +84,17 @@ function shiftWeek(key, n) {
   return getISOWeekKey(d);
 }
 
+/** Vérifie qu'un mot-clé correspond à un nom entier (pas une sous-chaîne d'un mot) */
+function matchesKeyword(name, kw) {
+  const e = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('(?<![a-zA-ZÀ-ÿ0-9])' + e + '(?![a-zA-ZÀ-ÿ0-9])', 'i').test(name);
+}
+
 function categorize(name, cats) {
   const low = name.toLowerCase();
   for (const c of [...cats].sort((a, b) => a.order - b.order)) {
     if (!c.kw || c.kw.length === 0) continue;
-    if (c.kw.some(k => low.includes(k.toLowerCase()))) return c.id;
+    if (c.kw.some(k => matchesKeyword(low, k.toLowerCase()))) return c.id;
   }
   return cats.find(c => !c.kw || c.kw.length === 0)?.id ?? cats[cats.length - 1]?.id;
 }
@@ -98,7 +104,7 @@ function getUncatIngredients(recipe, ingIds, cats) {
   return (recipe.ingredients || [])
     .filter(ing => ingIds.includes(ing.id))
     .filter(ing => !cats.some(c =>
-      c.kw?.length > 0 && c.kw.some(k => ing.name.toLowerCase().includes(k.toLowerCase()))
+      c.kw?.length > 0 && c.kw.some(k => matchesKeyword(ing.name.toLowerCase(), k.toLowerCase()))
     ));
 }
 
@@ -2739,7 +2745,7 @@ function ShoppingTab() {
     if (!newName.trim()) return;
     const name = newName.trim();
     const hasKeywordMatch = cats.some(c =>
-      c.kw?.length > 0 && c.kw.some(k => name.toLowerCase().includes(k.toLowerCase()))
+      c.kw?.length > 0 && c.kw.some(k => matchesKeyword(name.toLowerCase(), k.toLowerCase()))
     );
     if (!hasKeywordMatch) {
       setCatAssignItem({ name, qty: newQty, unit: newUnit });
@@ -3266,13 +3272,35 @@ function KpiCard({ icon, value, label, sub, color }) {
 //  OPTIONS TAB
 // ══════════════════════════════════════════════════════
 function SettingsTab() {
-  const { cats, settings, recipes, meals, shopping, deleteCat, updSettings, importAllData, showSnack } = useApp();
+  const { cats, settings, recipes, meals, shopping, deleteCat, updSettings, importAllData, showSnack, reorderCats } = useApp();
   const [editCat,  setEditCat]  = useState(null); // cat object en édition
   const [addOpen,  setAddOpen]  = useState(false);
   const [importErr, setImportErr] = useState('');
   const fileRef = useRef(null);
 
   const sorted = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
+
+  const moveCat = (id, dir) => {
+    const list = [...sorted];
+    const idx  = list.findIndex(c => c.id === id);
+    const next = idx + dir;
+    if (next < 0 || next >= list.length) return;
+    [list[idx], list[next]] = [list[next], list[idx]];
+    reorderCats(list);
+  };
+  const [dragCat,     setDragCat]     = useState(null);
+  const [dragOverCat, setDragOverCat] = useState(null);
+  const onCatDragEnd = () => {
+    if (dragCat && dragOverCat && dragCat !== dragOverCat) {
+      const list    = [...sorted];
+      const fromIdx = list.findIndex(c => c.id === dragCat);
+      const toIdx   = list.findIndex(c => c.id === dragOverCat);
+      const [item]  = list.splice(fromIdx, 1);
+      list.splice(toIdx, 0, item);
+      reorderCats(list);
+    }
+    setDragCat(null); setDragOverCat(null);
+  };
 
   // ── Export JSON ──────────────────────────────────────
   const handleExport = () => {
@@ -3319,18 +3347,56 @@ function SettingsTab() {
         <SecTitle style={{ margin:0 }}>Catégories de courses</SecTitle>
         <Btn onClick={() => setAddOpen(true)} variant="primary" small>+ Nouvelle</Btn>
       </div>
+      <div style={{
+        background:C.accentBg, border:`1px solid ${C.accent}33`,
+        borderRadius:10, padding:'8px 12px', marginBottom:10,
+        display:'flex', gap:8, alignItems:'center',
+      }}>
+        <span style={{ fontSize:15 }}>🛒</span>
+        <span style={{ fontSize:12, color:C.soft, lineHeight:1.5 }}>
+          Glisse ≡ ou utilise ▲▼ pour définir l'ordre des rayons — il s'applique automatiquement dans la liste de courses.
+        </span>
+      </div>
       <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:'4px 0', marginBottom:16 }}>
         {sorted.map((cat, idx) => (
-          <div key={cat.id} style={{
-            display:'flex', alignItems:'center', gap:10, padding:'9px 14px',
-            borderBottom: idx<sorted.length-1 ? `1px solid ${C.border}` : 'none',
-          }}>
-            <span style={{ fontSize:20 }}>{cat.emoji}</span>
+          <div key={cat.id}
+            draggable
+            onDragStart={() => setDragCat(cat.id)}
+            onDragEnter={() => setDragOverCat(cat.id)}
+            onDragEnd={onCatDragEnd}
+            onDragOver={e => e.preventDefault()}
+            style={{
+              display:'flex', alignItems:'center', gap:8, padding:'9px 12px',
+              borderBottom: idx<sorted.length-1 ? `1px solid ${C.border}` : 'none',
+              background: dragOverCat===cat.id && dragCat!==cat.id ? C.accentBg : 'transparent',
+              opacity: dragCat===cat.id ? 0.45 : 1,
+              transition:'background 0.1s',
+            }}>
+            {/* Numéro */}
+            <span style={{ fontSize:11, color:C.muted, minWidth:16, textAlign:'right', flexShrink:0 }}>{idx+1}</span>
+            {/* Poignée drag */}
+            <span style={{ color:C.muted, fontSize:15, cursor:'grab', flexShrink:0 }}>≡</span>
+            <span style={{ fontSize:20, flexShrink:0 }}>{cat.emoji}</span>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontWeight:500, color:C.text, fontSize:13 }}>{cat.name}</div>
               <div style={{ fontSize:11, color:C.muted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                 {cat.kw?.length > 0 ? cat.kw.slice(0,5).join(', ') + (cat.kw.length > 5 ? '…' : '') : 'Aucun mot-clé'}
               </div>
+            </div>
+            {/* Boutons ↑↓ */}
+            <div style={{ display:'flex', flexDirection:'column', gap:2, flexShrink:0 }}>
+              <button onClick={() => moveCat(cat.id, -1)} disabled={idx===0} style={{
+                background: idx===0 ? 'transparent' : C.border, border:'none',
+                color: idx===0 ? C.border : C.soft, borderRadius:4,
+                width:22, height:18, fontSize:10, cursor: idx===0?'default':'pointer',
+                lineHeight:1, padding:0, fontFamily:'inherit',
+              }}>▲</button>
+              <button onClick={() => moveCat(cat.id, +1)} disabled={idx===sorted.length-1} style={{
+                background: idx===sorted.length-1 ? 'transparent' : C.border, border:'none',
+                color: idx===sorted.length-1 ? C.border : C.soft, borderRadius:4,
+                width:22, height:18, fontSize:10, cursor: idx===sorted.length-1?'default':'pointer',
+                lineHeight:1, padding:0, fontFamily:'inherit',
+              }}>▼</button>
             </div>
             <button onClick={() => setEditCat(cat)} style={{
               background:C.accentBg, border:`1px solid ${C.accent}33`, color:C.accent,
@@ -3410,7 +3476,7 @@ function CategoryEditModal({ cat, onClose }) {
 
   const save = () => {
     if (!name.trim()) return;
-    updateCat({ ...cat, emoji, name:name.trim(), kw:kwStr.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean) });
+    updateCat({ ...cat, emoji, name:name.trim(), kw:kwStr.split(/[,\n]+/).map(k=>k.trim().toLowerCase()).filter(Boolean) });
     onClose();
   };
 
@@ -3453,7 +3519,7 @@ function CategoryAddModal({ onClose }) {
 
   const create = () => {
     if (!name.trim()) return;
-    addCat({ name:name.trim(), emoji, kw:kwStr.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean) });
+    addCat({ name:name.trim(), emoji, kw:kwStr.split(/[,\n]+/).map(k=>k.trim().toLowerCase()).filter(Boolean) });
     onClose();
   };
 
