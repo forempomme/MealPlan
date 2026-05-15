@@ -2838,7 +2838,7 @@ function ShoppingTab() {
       {shopping.length === 0 && <EmptyState icon="🛒" text="La liste est vide" />}
 
       {/* ── Catégories draggables ── */}
-      {sortedCats.map(cat => {
+      {sortedCats.map((cat, idx) => {
         const items = shopping.filter(s => s.categoryId===cat.id);
         if (!items.length) return null;
         const over  = dragOverCat === cat.id;
