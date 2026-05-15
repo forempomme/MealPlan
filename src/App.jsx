@@ -2765,7 +2765,7 @@ function ShoppingTab() {
       {/* ── Ajout rapide (toujours en haut, compact) ── */}
       <div style={{
         display:'flex', gap:5, marginBottom:10, alignItems:'center',
-        background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:'7px 9px',
+        background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:'9px 11px',
       }}>
         <input value={newName} onChange={e=>setNewName(e.target.value)}
           onKeyDown={e=>e.key==='Enter'&&handleAdd()}
@@ -2940,11 +2940,11 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
       style={{ marginBottom:7, borderRadius:10, overflow:'hidden', ...borderStyle, transition:'border 0.1s' }}
     >
       {/* En-tête */}
-      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background:C.card, userSelect:'none' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 12px', background:C.card, userSelect:'none' }}>
         <span style={{ color:C.muted, fontSize:14, cursor:'grab', paddingRight:2 }}>≡</span>
         <span onClick={() => setOpen(o=>!o)} style={{ flex:1, display:'flex', alignItems:'center', gap:6, cursor:'pointer' }}>
-          <span style={{ fontSize:15 }}>{cat.emoji}</span>
-          <span style={{ fontWeight:600, fontSize:12, color:C.text }}>{cat.name}</span>
+          <span style={{ fontSize:17 }}>{cat.emoji}</span>
+          <span style={{ fontWeight:600, fontSize:14, color:C.text }}>{cat.name}</span>
           <span style={{
             fontSize:10, fontWeight:700, color:'#fff',
             background:C.accent, padding:'1px 7px', borderRadius:20, marginLeft:'auto',
@@ -3013,7 +3013,7 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
       draggable onDragStart={onDragStart} onDragOver={onDragOver}
       onDrop={onDrop} onDragEnd={onDragEnd}
       style={{
-        display:'flex', alignItems:'center', gap:7, padding:'7px 10px',
+        display:'flex', alignItems:'center', gap:7, padding:'10px 12px',
         borderBottom:`1px solid ${C.border}22`,
         opacity: item.checked ? 0.42 : 1, transition:'all 0.12s',
         borderTop: isDragOver ? `2px solid ${C.accent}88` : '2px solid transparent',
@@ -3030,14 +3030,14 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
         {item.checked ? '✓' : ''}
       </button>
       <span onClick={() => !item.checked && setEditing(true)} style={{
-        flex:1, color:C.text, fontSize:12, lineHeight:1.3,
+        flex:1, color:C.text, fontSize:13, lineHeight:1.3, textAlign:'center',
         textDecoration: item.checked ? 'line-through' : 'none',
         cursor: item.checked ? 'default' : 'pointer',
       }}>{item.name}</span>
       {item.fromRecipeId && <span style={{ fontSize:10, color:C.accent, flexShrink:0 }}>📅</span>}
       {item.qty > 0 && (
         <span onClick={() => !item.checked && setEditing(true)} style={{
-          color:C.muted, fontSize:11, flexShrink:0, cursor: item.checked?'default':'pointer',
+          color:'#fff', fontSize:13, flexShrink:0, cursor: item.checked?'default':'pointer',
         }}>{item.qty}{item.unit?' '+item.unit:''}</span>
       )}
     </div>
