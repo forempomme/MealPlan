@@ -111,38 +111,10 @@ function getUncatIngredients(recipe, ingIds, cats) {
 // ══════════════════════════════════════════════════════
 //  DONNÉES INITIALES (démo)
 // ══════════════════════════════════════════════════════
-const CW = getISOWeekKey();
 
-const INIT_RECIPES = [
-  { id:'r1', name:'Poulet rôti aux herbes', emoji:'🍗', portions:4, url:'', tags:['volaille','four'], favorite:true, rating:5, cookTimeMinutes:75, note:'Délicieux avec des pommes de terre rôties',
-    ingredients:[{id:'i1',name:'Poulet entier',qty:1,unit:''},{id:'i2',name:'Thym frais',qty:3,unit:'branche'},{id:'i3',name:'Ail',qty:4,unit:'gousse'},{id:'i4',name:"Huile d'olive",qty:3,unit:'cs'},{id:'i5',name:'Sel',qty:1,unit:'pincée'},{id:'i6',name:'Pommes de terre',qty:600,unit:'g'}],
-    steps:["Préchauffer le four à 200°C","Frotter le poulet avec l'huile, les herbes et le sel","Glisser l'ail sous la peau","Disposer les pommes de terre autour","Enfourner 1h15 en arrosant toutes les 20 min"],
-    createdAt: ts()-864e5*10 },
-  { id:'r2', name:'Pasta Carbonara', emoji:'🍝', portions:2, url:'', tags:['pâtes','rapide'], favorite:true, rating:5, cookTimeMinutes:20, note:'Ne jamais utiliser de crème !',
-    ingredients:[{id:'i1',name:'Spaghetti',qty:200,unit:'g'},{id:'i2',name:'Lardons fumés',qty:150,unit:'g'},{id:'i3',name:'Œufs',qty:3,unit:''},{id:'i4',name:'Parmesan râpé',qty:80,unit:'g'},{id:'i5',name:'Poivre noir',qty:1,unit:'pincée'}],
-    steps:['Cuire les pâtes al dente dans de l\'eau bien salée','Faire revenir les lardons sans matière grasse','Dans un bol, mélanger œufs, parmesan et poivre','Égoutter les pâtes en gardant un peu d\'eau','Mélanger hors du feu en ajoutant l\'eau de cuisson'],
-    createdAt: ts()-864e5*7 },
-  { id:'r3', name:'Soupe de légumes', emoji:'🥣', portions:4, url:'', tags:['légumes','soupe','hiver'], favorite:false, rating:4, cookTimeMinutes:40, note:'Servir avec du pain grillé frotté à l\'ail',
-    ingredients:[{id:'i1',name:'Carottes',qty:3,unit:''},{id:'i2',name:'Courgettes',qty:2,unit:''},{id:'i3',name:'Poireaux',qty:2,unit:''},{id:'i4',name:'Pommes de terre',qty:2,unit:''},{id:'i5',name:'Bouillon de légumes',qty:1,unit:'L'}],
-    steps:['Éplucher et couper tous les légumes en morceaux','Faire revenir les poireaux dans un filet d\'huile','Ajouter le bouillon et tous les légumes','Cuire 30 min à feu moyen','Mixer selon la consistance souhaitée'],
-    createdAt: ts()-864e5*5 },
-  { id:'r4', name:'Saumon en papillote', emoji:'🐟', portions:2, url:'', tags:['poisson','santé','four'], favorite:false, rating:4, cookTimeMinutes:25, note:'Accompagner de riz ou de quinoa',
-    ingredients:[{id:'i1',name:'Pavé de saumon',qty:2,unit:''},{id:'i2',name:'Citron',qty:1,unit:''},{id:'i3',name:'Aneth',qty:1,unit:'bouquet'},{id:'i4',name:'Beurre',qty:20,unit:'g'},{id:'i5',name:'Sel',qty:1,unit:'pincée'}],
-    steps:['Préchauffer le four à 180°C','Placer chaque pavé sur une feuille d\'aluminium','Ajouter une rondelle de citron, l\'aneth et une noisette de beurre','Fermer hermétiquement la papillote','Cuire 20 min au four'],
-    createdAt: ts()-864e5*3 },
-  { id:'r5', name:'Tarte aux pommes', emoji:'🥧', portions:6, url:'', tags:['dessert','four'], favorite:false, rating:5, cookTimeMinutes:50, note:'Délicieux tiède avec une boule de glace vanille',
-    ingredients:[{id:'i1',name:'Pâte brisée',qty:1,unit:''},{id:'i2',name:'Pommes',qty:4,unit:''},{id:'i3',name:'Sucre',qty:80,unit:'g'},{id:'i4',name:'Beurre',qty:30,unit:'g'},{id:'i5',name:'Cannelle',qty:1,unit:'cc'}],
-    steps:['Préchauffer à 180°C et étaler la pâte dans un moule','Éplucher, épépiner et trancher les pommes finement','Disposer en rosace sur la pâte','Saupoudrer de sucre et cannelle, ajouter les noisettes de beurre','Cuire 40-45 min jusqu\'à ce que les pommes soient dorées'],
-    createdAt: ts()-864e5*2 },
-];
 
-const INIT_MEALS = [
-  { id:'m1', weekKey:CW,                    recipeId:'r1', persons:4, done:false, addedAt:ts()-864e5 },
-  { id:'m2', weekKey:CW,                    recipeId:'r2', persons:2, done:true,  addedAt:ts()-864e5*2 },
-  { id:'m3', weekKey:shiftWeek(CW,-1),      recipeId:'r3', persons:4, done:true,  addedAt:ts()-864e5*10 },
-  { id:'m4', weekKey:shiftWeek(CW,-1),      recipeId:'r4', persons:2, done:true,  addedAt:ts()-864e5*9 },
-  { id:'m5', weekKey:shiftWeek(CW, 1),      recipeId:'r2', persons:4, done:false, addedAt:ts()-864e5 },
-];
+const INIT_RECIPES = [];
+const INIT_MEALS   = [];
 
 // ══════════════════════════════════════════════════════
 //  PERSISTANCE — localStorage + fallback mémoire
@@ -732,10 +704,11 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
   const { meals, recipes, cats, addMeal, addIngredientsFromRecipe, duplicateWeek } = useApp();
-  const [pickerWeek,  setPickerWeek]  = useState(null);
-  const [dupWeek,     setDupWeek]     = useState(null);
-  const [filterData,  setFilterData]  = useState(null);
+  const [pickerWeek,   setPickerWeek]   = useState(null);
+  const [dupWeek,      setDupWeek]      = useState(null);
+  const [filterData,   setFilterData]   = useState(null);
   const [multiCatData, setMultiCatData] = useState(null);
+  const [viewRecipe,   setViewRecipe]   = useState(null);
   const [btnVisible,  setBtnVisible]  = useState(false);
   const currentWeek    = getISOWeekKey();
   const currentYear    = new Date().getFullYear();
@@ -888,6 +861,7 @@ function PlanningTab() {
             <WeekCard weekKey={wk} isCurrent={wk === currentWeek}
               onAdd={() => setPickerWeek(wk)}
               onDup={() => setDupWeek(wk)}
+              onViewRecipe={setViewRecipe}
             />
           </div>
         ))}
@@ -965,11 +939,18 @@ function PlanningTab() {
           onDup={to => { duplicateWeek(dupWeek, to); setDupWeek(null); }}
         />
       )}
+      {viewRecipe && (
+        <RecipeDetail recipe={viewRecipe}
+          onClose={() => setViewRecipe(null)}
+          onEdit={null}
+          onDelete={null}
+        />
+      )}
     </div>
   );
 }
 
-function WeekCard({ weekKey, isCurrent, onAdd, onDup }) {
+function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
   const { meals, recipes } = useApp();
   const [expanded, setExpanded] = useState(isCurrent);
   const weekMeals = meals.filter(m => m.weekKey === weekKey);
@@ -1030,7 +1011,7 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup }) {
           )}
           {weekMeals.map(meal => {
             const recipe = recipes.find(r => r.id === meal.recipeId);
-            return recipe ? <MealItem key={meal.id} meal={meal} recipe={recipe} /> : null;
+            return recipe ? <MealItem key={meal.id} meal={meal} recipe={recipe} onViewRecipe={onViewRecipe} /> : null;
           })}
           <div style={{ display:'flex', gap:6, marginTop:6, flexWrap:'wrap' }}>
             <Btn onClick={onAdd} variant="primary" small>+ Ajouter</Btn>
@@ -1043,7 +1024,7 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup }) {
   );
 }
 
-function MealItem({ meal, recipe }) {
+function MealItem({ meal, recipe, onViewRecipe }) {
   const { toggleMealDone, updateMealPersons, deleteMeal } = useApp();
   const [confirm, setConfirm] = useState(false);
 
@@ -1072,7 +1053,7 @@ function MealItem({ meal, recipe }) {
 
       <span style={{ fontSize:18, flexShrink:0 }}>{recipe.emoji}</span>
 
-      <div style={{ flex:1, minWidth:0 }}>
+      <div onClick={() => onViewRecipe?.(recipe)} style={{ flex:1, minWidth:0, cursor:'pointer' }}>
         <div style={{
           fontWeight:500, fontSize:15, color: meal.done ? C.muted : C.text,
           textDecoration: meal.done ? 'line-through' : 'none',
@@ -1461,6 +1442,7 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
       </BottomSheet>
       {filterOpen && (
         <IngredientFilterModal
+          key={persons}
           selections={[{ recipe, persons }]}
           onConfirm={selectedByRecipe => handleIngredientConfirm(selectedByRecipe[recipe.id] || [])}
           onSkip={() => doAdd()}
@@ -2195,17 +2177,27 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
   };
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const addIng  = () => set('ingredients', [...form.ingredients, { id:genId(), name:'', qty:'', unit:'' }]);
+  const addIng  = () => {
+    const newIng = { id:genId(), name:'', qty:'', unit:'' };
+    set('ingredients', [...form.ingredients, newIng]);
+    portionsBaseRef.current = {
+      ...portionsBaseRef.current,
+      ingredients: [...portionsBaseRef.current.ingredients, { id: newIng.id, qty: 0 }],
+    };
+  };
   const remIng  = id => set('ingredients', form.ingredients.filter(i => i.id !== id));
   const updIng  = (id, k, v) => {
-    set('ingredients', form.ingredients.map(i => i.id===id ? {...i,[k]:v} : i));
-    // Si l'utilisateur édite une quantité manuellement, on met à jour la base de référence
+    const newIngs = form.ingredients.map(i => i.id===id ? {...i,[k]:v} : i);
+    set('ingredients', newIngs);
+    // Édition manuelle d'une quantité : on recalibre toute la base de référence
+    // pour que le prochain +/- parte d'un état cohérent pour tous les ingrédients
     if (k === 'qty') {
       portionsBaseRef.current = {
-        ...portionsBaseRef.current,
-        ingredients: portionsBaseRef.current.ingredients.map(x =>
-          x.id === id ? { ...x, qty: parseFloat(v) || 0 } : x
-        ),
+        portions:    parseInt(form.portions) || 1,
+        ingredients: newIngs.map(i => ({
+          id:  i.id,
+          qty: i.id === id ? parseFloat(v) || 0 : parseFloat(i.qty) || 0,
+        })),
       };
     }
   };
@@ -2669,7 +2661,8 @@ function ShoppingTab() {
   const [newName,  setNewName]  = useState('');
   const [newQty,   setNewQty]   = useState('');
   const [newUnit,  setNewUnit]  = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuOpen,     setMenuOpen]     = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [dragOverCat,  setDragOverCat]  = useState(null);
   const [dragLineCat,  setDragLineCat]  = useState(null); // 'before'|'after' relative to dragOverCat
   const dragRef    = useRef({ type: null, id: null, catId: null });
@@ -2721,7 +2714,6 @@ function ShoppingTab() {
     if (fromId === targetId) return;
 
     const ids = sortedCats.map(c => c.id);
-    const fromIdx = ids.indexOf(fromId);
     const rect = e.currentTarget.getBoundingClientRect();
     const insertAfter = e.clientY > rect.top + rect.height / 2;
 
@@ -2781,6 +2773,7 @@ function ShoppingTab() {
       <div style={{
         display:'flex', gap:5, marginBottom:10, alignItems:'center',
         background:C.card, border:`1px solid ${C.border}`, borderRadius:11, padding:'9px 11px',
+        position:'sticky', top:0, zIndex:10,
       }}>
         <input value={newName} onChange={e=>setNewName(e.target.value)}
           onKeyDown={e=>e.key==='Enter'&&handleAdd()}
@@ -2825,10 +2818,26 @@ function ShoppingTab() {
                     borderBottom:`1px solid ${C.border}`,
                   }}>✅ Vider les cochés ({checkedCount})</button>
                 )}
-                <button onClick={() => { clearAll(); setMenuOpen(false); }} style={{
-                  display:'block', width:'100%', padding:'10px 14px', background:'none',
-                  color:C.red, border:'none', textAlign:'left', cursor:'pointer', fontSize:13,
-                }}>🗑 Tout vider</button>
+                {!confirmClear ? (
+                  <button onClick={() => setConfirmClear(true)} style={{
+                    display:'block', width:'100%', padding:'10px 14px', background:'none',
+                    color:C.red, border:'none', textAlign:'left', cursor:'pointer', fontSize:13,
+                  }}>🗑 Tout vider</button>
+                ) : (
+                  <div style={{ padding:'10px 14px' }}>
+                    <div style={{ fontSize:12, color:C.red, marginBottom:8, fontWeight:600 }}>Vider toute la liste ?</div>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <button onClick={() => { clearAll(); setMenuOpen(false); setConfirmClear(false); }} style={{
+                        flex:1, padding:'6px', borderRadius:7, border:'none',
+                        background:C.red, color:'#fff', fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight:600,
+                      }}>Confirmer</button>
+                      <button onClick={() => setConfirmClear(false)} style={{
+                        flex:1, padding:'6px', borderRadius:7, border:`1px solid ${C.border}`,
+                        background:'transparent', color:C.muted, fontSize:12, cursor:'pointer', fontFamily:'inherit',
+                      }}>Annuler</button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2925,7 +2934,6 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
     if (fromId === targetId) return;
 
     const ids = allItems.map(i => i.id);
-    const fromIdx = ids.indexOf(fromId);
     // Insérer avant ou après selon Y
     const rect = e.currentTarget.getBoundingClientRect();
     const insertAfter = e.clientY > rect.top + rect.height / 2;
@@ -3005,33 +3013,43 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
 }
 
 function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd }) {
-  const { deleteShoppingItem, updateShoppingItem } = useApp();
+  const { deleteShoppingItem, updateShoppingItem, cats } = useApp();
   const [editing,  setEditing]  = useState(false);
   const [editName, setEditName] = useState(item.name);
   const [editQty,  setEditQty]  = useState(item.qty || '');
   const [editUnit, setEditUnit] = useState(item.unit || '');
+  const [editCat,  setEditCat]  = useState(item.categoryId || '');
+
+  const sortedCats = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
 
   const saveEdit = () => {
-    if (editName.trim()) updateShoppingItem(item.id, { name:editName.trim(), qty:parseFloat(editQty)||0, unit:editUnit });
+    if (editName.trim()) updateShoppingItem(item.id, {
+      name: editName.trim(), qty: parseFloat(editQty)||0,
+      unit: editUnit, categoryId: editCat,
+    });
     setEditing(false);
   };
 
   if (editing) {
     return (
-      <div style={{ padding:'6px 10px', background:C.cardHov, borderBottom:`1px solid ${C.border}22` }}>
-        <div style={{ display:'flex', gap:5, marginBottom:5 }}>
+      <div style={{ padding:'8px 12px', background:C.cardHov, borderBottom:`1px solid ${C.border}22` }}>
+        <div style={{ display:'flex', gap:5, marginBottom:6 }}>
           <input autoFocus value={editName} onChange={e=>setEditName(e.target.value)}
             onKeyDown={e=>{ if(e.key==='Enter') saveEdit(); if(e.key==='Escape') setEditing(false); }}
-            style={{ flex:1, minWidth:0, padding:'4px 8px', background:C.bg, border:`1px solid ${C.accent}66`, borderRadius:6, color:C.text, fontSize:12, outline:'none' }}
+            style={{ flex:1, minWidth:0, padding:'5px 8px', background:C.bg, border:`1px solid ${C.accent}66`, borderRadius:6, color:C.text, fontSize:13, outline:'none' }}
           />
           <input type="number" value={editQty} onChange={e=>setEditQty(e.target.value)}
-            style={{ width:40, flexShrink:0, padding:'4px 4px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, outline:'none' }}
+            style={{ width:42, flexShrink:0, padding:'5px 4px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, outline:'none' }}
           />
           <select value={editUnit} onChange={e=>setEditUnit(e.target.value)}
-            style={{ width:46, flexShrink:0, padding:'4px 3px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:11, outline:'none' }}>
+            style={{ width:46, flexShrink:0, padding:'5px 3px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:11, outline:'none' }}>
             {UNITS.map(u => <option key={u} value={u}>{u||'—'}</option>)}
           </select>
         </div>
+        <select value={editCat} onChange={e=>setEditCat(e.target.value)}
+          style={{ width:'100%', padding:'5px 8px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, outline:'none', marginBottom:6 }}>
+          {sortedCats.map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+        </select>
         <div style={{ display:'flex', gap:5 }}>
           <Btn onClick={saveEdit} variant="primary" small>✓ OK</Btn>
           <Btn onClick={() => setEditing(false)} variant="ghost" small>Annuler</Btn>
@@ -3589,10 +3607,16 @@ function Snackbar() {
 // ══════════════════════════════════════════════════════
 function AppShell() {
   const [tab, setTab] = useState('planning');
+  const mainRef = useRef(null);
+
+  useEffect(() => {
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+  }, [tab]);
+
   return (
     <div style={{ height:'100vh', background:C.bg, display:'flex', flexDirection:'column', maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <AppHeader tab={tab} />
-      <main style={{ flex:1, overflowY:'auto', paddingBottom:70 }}>
+      <main ref={mainRef} style={{ flex:1, overflowY:'auto', paddingBottom:70 }}>
         {tab === 'planning' && <PlanningTab />}
         {tab === 'recipes'  && <RecipesTab />}
         {tab === 'shopping' && <ShoppingTab />}
