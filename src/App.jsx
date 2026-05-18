@@ -3606,7 +3606,7 @@ function Snackbar() {
 //  APP SHELL
 // ══════════════════════════════════════════════════════
 function AppShell() {
-  const [tab, setTab] = useState('planning');
+  const [tab, setTab] = useState('shopping');
   const mainRef = useRef(null);
 
   useEffect(() => {
