@@ -245,6 +245,15 @@ function AppProvider({ children }) {
     if (item) showSnack(`"${item.name}" supprimé`, () => setShopping(p => [...p, item]));
   };
 
+  const deleteItemsByCategory = (catId) => {
+    const toDelete = shopping.filter(s => s.categoryId === catId);
+    if (!toDelete.length) return;
+    setShopping(p => p.filter(s => s.categoryId !== catId));
+    const catName = cats.find(c => c.id === catId)?.name || 'Catégorie';
+    const label = `${toDelete.length} article${toDelete.length > 1 ? 's' : ''} de "${catName}" supprimés`;
+    showSnack(label, () => setShopping(p => [...p, ...toDelete]));
+  };
+
   const clearChecked = () => setShopping(p => p.filter(s => !s.checked));
   const clearAll     = () => setShopping([]);
 
@@ -285,7 +294,7 @@ function AppProvider({ children }) {
       recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
       addRecipe, updateRecipe, deleteRecipe,
       addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, deleteMeal, duplicateWeek,
-      addShoppingItem, deleteShoppingItem, updateShoppingItem, clearChecked, clearAll,
+      addShoppingItem, deleteShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
       reorderItemsInCat, addCat, deleteCat, updateCat, reorderCats, updSettings, importAllData,
     }}>
       {children}
@@ -2657,7 +2666,7 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
 //  COURSES TAB
 // ══════════════════════════════════════════════════════
 function ShoppingTab() {
-  const { shopping, cats, addShoppingItem, clearChecked, clearAll, showSnack, reorderCats } = useApp();
+  const { shopping, cats, addShoppingItem, deleteItemsByCategory, clearChecked, clearAll, showSnack, reorderCats } = useApp();
   const [newName,  setNewName]  = useState('');
   const [newQty,   setNewQty]   = useState('');
   const [newUnit,  setNewUnit]  = useState('');
@@ -2863,6 +2872,7 @@ function ShoppingTab() {
             dragRef={dragRef}
             onMoveUp={idx > 0 ? () => moveCatInShopping(cat.id, -1) : null}
             onMoveDown={idx < sortedCats.length - 1 ? () => moveCatInShopping(cat.id, +1) : null}
+            onDeleteAll={() => deleteItemsByCategory(cat.id)}
           />
         );
       })}
@@ -2904,7 +2914,7 @@ function ShoppingTab() {
   );
 }
 
-function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onCatDragOver, onCatDrop, onCatDragEnd, dragRef, onMoveUp, onMoveDown }) {
+function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onCatDragOver, onCatDrop, onCatDragEnd, dragRef, onMoveUp, onMoveDown, onDeleteAll }) {
   const { reorderItemsInCat } = useApp();
   const [open, setOpen] = useState(true);
   const [dragOverItem, setDragOverItem] = useState(null);
@@ -2967,6 +2977,16 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
       {/* En-tête */}
       <div style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 12px', background:C.card, userSelect:'none' }}>
         <span style={{ color:C.muted, fontSize:14, cursor:'grab', paddingRight:2 }}>≡</span>
+        {/* Tout supprimer la catégorie */}
+        <button
+          onPointerDown={e => { e.stopPropagation(); onDeleteAll?.(); }}
+          title="Tout supprimer"
+          style={{
+            width:22, height:22, borderRadius:'50%', border:`1.5px solid ${C.green}`,
+            background:'transparent', color:C.green, fontSize:11, fontWeight:700,
+            cursor:'pointer', lineHeight:1, padding:0, flexShrink:0, display:'flex',
+            alignItems:'center', justifyContent:'center',
+          }}>✓</button>
         <span onClick={() => setOpen(o=>!o)} style={{ flex:1, display:'flex', alignItems:'center', gap:6, cursor:'pointer' }}>
           <span style={{ fontSize:17 }}>{cat.emoji}</span>
           <span style={{ fontWeight:600, fontSize:14, color:C.text }}>{cat.name}</span>
