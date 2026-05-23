@@ -72,6 +72,10 @@ public class RecipeImporter {
             result = parseMicrodata(doc, url);
             if (result != null) return result;
 
+            // ── 4. HTML content (Overblog, blogs sans markup structuré) ──
+            result = parseHtmlContent(doc, url);
+            if (result != null) return result;
+
             return error("Aucune donnée de recette trouvée sur cette page");
 
         } catch (Exception e) {
@@ -260,6 +264,114 @@ public class RecipeImporter {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // ══════════════════════════════════════════════════════
+    //  PARSING HTML CONTENT (blogs sans markup structuré : Overblog, etc.)
+    // ══════════════════════════════════════════════════════
+
+    /**
+     * Parcourt le DOM à la recherche de sections "Ingrédients" et "Préparation"
+     * signalées par des titres (h2/h3) ou du texte gras court suivi de ":".
+     * Couvre Overblog, Canalblog, blogs WordPress sans plugin recette, etc.
+     */
+    private static String parseHtmlContent(Document doc, String url) {
+        // ── Titre ─────────────────────────────────────────
+        String title = "";
+        Element h1 = doc.selectFirst("h1");
+        if (h1 != null) title = h1.text().trim();
+        if (title.isEmpty()) {
+            Element titleEl = doc.selectFirst("title");
+            if (titleEl != null)
+                title = titleEl.text().replaceAll("(?i)\\s*[-|–—].*$", "").trim();
+        }
+
+        JSONArray ingredients = new JSONArray();
+        JSONArray steps       = new JSONArray();
+        int servings          = 4;
+
+        // ── Conteneur principal ───────────────────────────
+        Element content = doc.selectFirst(
+            "article, .entry-content, .post-content, .article-content, " +
+            ".ob-post-content, .ob-section-text, .post-body, .blog-post-text, " +
+            "[itemprop='articleBody'], .recipe-content, main"
+        );
+        if (content == null) content = doc.body();
+
+        String section = null;
+
+        for (Element el : content.select("h1,h2,h3,h4,h5,p,li,b,strong")) {
+            String tag  = el.tagName().toLowerCase();
+            String text = el.text().trim();
+            if (text.isEmpty()) continue;
+
+            String lower = normalizeFr(text);
+
+            boolean isHeader = tag.matches("h[1-5]") ||
+                ((tag.equals("b") || tag.equals("strong")) && text.length() < 60);
+
+            // ── Détection de section ─────────────────────
+            if (isHeader || (lower.endsWith(":") && text.length() < 60)) {
+                if (lower.matches(".*ingr.?dient.*")) {
+                    section = "ing";  continue;
+                }
+                if (lower.matches(".*(pr.?paration|.?tape|instruction|r.?alisation).*")) {
+                    section = "step"; continue;
+                }
+                // Titre de niveau 1-3 non reconnu → réinitialise la section
+                if (tag.matches("h[1-3]")) section = null;
+            }
+
+            // ── Extraction selon la section ──────────────
+            if ("li".equals(tag) || "p".equals(tag)) {
+                String clean = text
+                    .replaceAll("^\\s*[-–•*·]\\s*", "")
+                    .replaceAll("^\\d+[.)\\s]+", "")
+                    .trim();
+
+                if ("ing".equals(section) && !clean.isEmpty() && clean.length() < 200) {
+                    ingredients.put(clean);
+                    // Détection du nombre de portions
+                    Matcher sm = Pattern.compile(
+                        "pour\\s+(\\d+)\\s*(?:personne|portion|part)",
+                        Pattern.CASE_INSENSITIVE).matcher(clean);
+                    if (sm.find()) {
+                        try { servings = Integer.parseInt(sm.group(1)); }
+                        catch (NumberFormatException ignored) {}
+                    }
+                } else if ("step".equals(section) && !clean.isEmpty() && clean.length() > 15) {
+                    steps.put(clean);
+                }
+            }
+        }
+
+        if (ingredients.length() == 0 && steps.length() == 0) return null;
+
+        try {
+            JSONObject out = new JSONObject();
+            out.put("name",            title);
+            out.put("servings",        servings);
+            out.put("cookTimeMinutes", 0);
+            out.put("ingredients",     ingredients);
+            out.put("steps",           steps);
+            out.put("tags",            new JSONArray());
+            out.put("note",            "");
+            out.put("url",             url);
+            return out.toString();
+        } catch (JSONException e) {
+            return null;
+        }
+    }
+
+    /** Normalise les accents français + minuscules pour comparaison de section */
+    private static String normalizeFr(String s) {
+        return s.toLowerCase()
+                .replaceAll("[éèêë]", "e")
+                .replaceAll("[àâä]",  "a")
+                .replaceAll("[ùûü]",  "u")
+                .replaceAll("[ôö]",   "o")
+                .replaceAll("[îï]",   "i")
+                .trim();
     }
 
     // ══════════════════════════════════════════════════════

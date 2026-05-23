@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.5.0"; // v15
+const VERSION = "2.5.1"; // v16
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -1885,7 +1885,11 @@ function normalizeSchemaRecipe(s) {
 function findRecipeInObj(obj, depth = 10) {
   if (!obj || typeof obj !== 'object' || depth === 0) return null;
   const t = obj['@type'];
-  if (t === 'Recipe' || (Array.isArray(t) && t.includes('Recipe'))) return obj;
+  const isRecipe =
+    t === 'Recipe' ||
+    (typeof t === 'string' && (t.endsWith('/Recipe') || t.toLowerCase().includes('schema.org/recipe'))) ||
+    (Array.isArray(t) && t.some(v => typeof v === 'string' && (v === 'Recipe' || v.endsWith('/Recipe'))));
+  if (isRecipe) return obj;
   if (Array.isArray(obj)) {
     for (const item of obj) { const r = findRecipeInObj(item, depth-1); if (r) return r; }
     return null;
@@ -1968,10 +1972,61 @@ function parseMicrodata(doc) {
   };
 }
 
-/** Pipeline complet HTML → ParsedRecipe (JSON-LD → __NEXT_DATA__ → Microdata) */
+/** Pipeline complet HTML → ParsedRecipe (JSON-LD → __NEXT_DATA__ → Microdata → texte HTML) */
 function parseHtml(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  return parseJsonLd(doc) || parseNextData(doc) || parseMicrodata(doc) || null;
+  return parseJsonLd(doc) || parseNextData(doc) || parseMicrodata(doc) || parseHtmlContent(doc) || null;
+}
+
+/**
+ * Étape 5 — HTML brut : extrait ingrédients et étapes depuis les sections
+ * "Ingrédients" / "Préparation" pour les blogs sans markup structuré (Overblog, Canalblog…).
+ */
+function parseHtmlContent(doc) {
+  const normFr = s => s.toLowerCase()
+    .replace(/[éèêë]/g, 'e').replace(/[àâä]/g, 'a')
+    .replace(/[ùûü]/g, 'u').replace(/[ôö]/g, 'o').replace(/[îï]/g, 'i');
+
+  // Titre
+  let name = '';
+  const h1 = doc.querySelector('h1');
+  if (h1) name = h1.textContent.trim();
+  if (!name) {
+    const t = doc.querySelector('title');
+    if (t) name = t.textContent.replace(/\s*[-|–—].*$/, '').trim();
+  }
+
+  // Conteneur principal
+  const content = doc.querySelector(
+    'article, .entry-content, .post-content, .article-content, ' +
+    '.ob-post-content, .ob-section-text, .post-body, [itemprop="articleBody"], main'
+  ) || doc.body;
+
+  const ingredients = [], steps = [];
+  let section = null;
+
+  for (const el of content.querySelectorAll('h1,h2,h3,h4,h5,p,li,b,strong')) {
+    const tag   = el.tagName.toLowerCase();
+    const text  = el.textContent.trim();
+    if (!text) continue;
+    const lower = normFr(text);
+    const isHeader = /^h[1-5]$/.test(tag) || ((tag === 'b' || tag === 'strong') && text.length < 60);
+
+    if (isHeader || (lower.endsWith(':') && text.length < 60)) {
+      if (/ingr.?dient/.test(lower))                              { section = 'ing';  continue; }
+      if (/(pr.?paration|.?tape|instruction|r.?alisation)/.test(lower)) { section = 'step'; continue; }
+      if (/^h[1-3]$/.test(tag)) section = null;
+    }
+
+    if (tag === 'li' || tag === 'p') {
+      const clean = text.replace(/^\s*[-–•*·]\s*/, '').replace(/^\d+[.)]\s*/, '').trim();
+      if (section === 'ing'  && clean && clean.length < 200)  ingredients.push(clean);
+      if (section === 'step' && clean && clean.length > 15)   steps.push(clean);
+    }
+  }
+
+  if (!ingredients.length && !steps.length) return null;
+  return { name, cookTimeMinutes: 0, servings: 4, ingredients, steps, tags: [], note: '' };
 }
 
 function RecipeEditor({ recipe, onClose, onSave }) {
@@ -2068,9 +2123,12 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
       }),
     });
     const data = await res.json();
-    const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
-    const raw   = (texts[texts.length - 1] || '').replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
-    const rec   = JSON.parse(raw);
+    if (data.error) throw new Error(data.error.message || 'Erreur API Claude');
+    const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    // Cherche le bloc JSON dans la réponse (même si Claude ajoute du texte autour)
+    const jsonMatch = texts.replace(/^```(?:json)?\s*/im, '').replace(/\s*```\s*$/im, '').match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new SyntaxError('Aucun objet JSON trouvé dans la réponse Claude');
+    const rec = JSON.parse(jsonMatch[0]);
     rec.ingredients = (rec.ingredients || []).map(i =>
       typeof i === 'string' ? i : [i.qty||'', i.unit||'', i.name||''].filter(Boolean).join(' ')
     );
@@ -3494,6 +3552,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.5.1</span> — Import HTML brut (Overblog, Canalblog…) · Fix @type URL schema · Extraction JSON Claude robustifiée<br/>
             <span style={{ color:C.accent }}>2.5.0</span> — Ouvrir recette depuis planning · UX courses · Corrections
           </div>
         </div>
