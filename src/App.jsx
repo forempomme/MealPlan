@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.2.0"; // v14
+const VERSION = "2.5.0"; // v15
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -3491,7 +3491,10 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>1.9.0</span> — Import recettes depuis sites web<br/>
             <span style={{ color:C.accent }}>2.0.0</span> — IngredientParser · EmojiGuesser · Jow API<br/>
             <span style={{ color:C.accent }}>2.1.0</span> — Édition catégories · Export/Import JSON<br/>
-            <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre
+            <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
+            <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
+            <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.5.0</span> — Ouvrir recette depuis planning · UX courses · Corrections
           </div>
         </div>
       </div>
