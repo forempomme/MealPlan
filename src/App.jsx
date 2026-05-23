@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.5.1"; // v16
+const VERSION = "2.5.2"; // v17
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -1398,6 +1398,7 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
   };
 
   const handleIngredientConfirm = (ingredientIds) => {
+    setFilterOpen(false); // Ferme immédiatement le filtre pour éviter un double-appel
     const uncat = getUncatIngredients(recipe, ingredientIds, cats);
     if (uncat.length > 0) {
       setMultiCatData({
@@ -1454,7 +1455,7 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
           key={persons}
           selections={[{ recipe, persons }]}
           onConfirm={selectedByRecipe => handleIngredientConfirm(selectedByRecipe[recipe.id] || [])}
-          onSkip={() => doAdd()}
+          onSkip={() => { setFilterOpen(false); doAdd(); }}
           onCancel={() => setFilterOpen(false)}
         />
       )}
@@ -3552,6 +3553,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.5.2</span> — Fix double ajout repas/ingrédients depuis fiche recette<br/>
             <span style={{ color:C.accent }}>2.5.1</span> — Import HTML brut (Overblog, Canalblog…) · Fix @type URL schema · Extraction JSON Claude robustifiée<br/>
             <span style={{ color:C.accent }}>2.5.0</span> — Ouvrir recette depuis planning · UX courses · Corrections
           </div>
