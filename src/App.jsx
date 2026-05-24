@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.5.6"; // v21
+const VERSION = "2.5.8"; // v23
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -209,14 +209,9 @@ function AppProvider({ children }) {
   const [cats,     setCats]     = useState(() => loadFromStorage('mp_cats',      DEFAULT_CATS));
   const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4 }));
 
-  // ── Sauvegarde automatique ────────────────────────────
-  useEffect(() => saveToStorage('mp_recipes',  recipes),  [recipes]);
-  useEffect(() => saveToStorage('mp_meals',    meals),    [meals]);
-  useEffect(() => saveToStorage('mp_shopping', shopping), [shopping]);
-  useEffect(() => saveToStorage('mp_cats',     cats),     [cats]);
-  useEffect(() => saveToStorage('mp_settings', settings), [settings]);
   const [snack,    setSnack]    = useState(null);
   const snackRef = useRef(null);
+  const storageErrShown = useRef(false);
 
   const showSnack = useCallback((msg, undo) => {
     clearTimeout(snackRef.current);
@@ -224,13 +219,42 @@ function AppProvider({ children }) {
     snackRef.current = setTimeout(() => setSnack(null), 3500);
   }, []);
 
+  /** Sauvegarde avec détection d'erreur localStorage (quota plein, navigation privée…) */
+  const saveWithCheck = useCallback((key, value) => {
+    _mem[key] = value;
+    if (!_ls) return;
+    try {
+      _ls.setItem(key, JSON.stringify(value));
+      storageErrShown.current = false;
+    } catch {
+      if (!storageErrShown.current) {
+        storageErrShown.current = true;
+        showSnack('⚠️ Stockage local plein · données non sauvegardées sur le disque');
+      }
+    }
+  }, [showSnack]);
+
+  // ── Sauvegarde automatique ────────────────────────────
+  useEffect(() => saveWithCheck('mp_recipes',  recipes),  [recipes,  saveWithCheck]);
+  useEffect(() => saveWithCheck('mp_meals',    meals),    [meals,    saveWithCheck]);
+  useEffect(() => saveWithCheck('mp_shopping', shopping), [shopping, saveWithCheck]);
+  useEffect(() => saveWithCheck('mp_cats',     cats),     [cats,     saveWithCheck]);
+  useEffect(() => saveWithCheck('mp_settings', settings), [settings, saveWithCheck]);
+
   /* ── Recettes ── */
-  const addRecipe    = d => setRecipes(p => [{ ...d, id: genId(), createdAt: ts() }, ...p]);
-  const updateRecipe = d => setRecipes(p => p.map(r => r.id === d.id ? d : r));
+  const addRecipe    = d => { setRecipes(p => [{ ...d, id: genId(), createdAt: ts() }, ...p]); showSnack('✅ Recette créée'); };
+  const updateRecipe = d => { setRecipes(p => p.map(r => r.id === d.id ? d : r)); showSnack('✅ Recette mise à jour'); };
   const deleteRecipe = id => {
+    const recipe        = recipes.find(r => r.id === id);
+    const nMeals        = meals.filter(m => m.recipeId     === id).length;
+    const nShopping     = shopping.filter(s => s.fromRecipeId === id).length;
     setRecipes(p  => p.filter(r => r.id !== id));
     setMeals(p    => p.filter(m => m.recipeId !== id));
     setShopping(p => p.filter(s => s.fromRecipeId !== id));
+    const parts = [];
+    if (nMeals    > 0) parts.push(`${nMeals} repas`);
+    if (nShopping > 0) parts.push(`${nShopping} courses`);
+    showSnack(`🗑 "${recipe?.name || 'Recette'}" supprimée${parts.length ? ' · ' + parts.join(', ') + ' retirés' : ''}`);
   };
 
   /* ── Repas ── */
@@ -261,6 +285,11 @@ function AppProvider({ children }) {
       const ex = shopping.find(s => !s.checked && s.name.trim().toLowerCase() === norm);
       return ex && tryMergeQty(ex.qty, ex.unit, item.qty, item.unit) !== null;
     });
+    const incompatibles = items.filter(item => {
+      const norm = item.name.trim().toLowerCase();
+      const ex = shopping.find(s => !s.checked && s.name.trim().toLowerCase() === norm);
+      return ex && tryMergeQty(ex.qty, ex.unit, item.qty, item.unit) === null;
+    });
     if (merges.length === 1) {
       const item = merges[0];
       const norm = item.name.trim().toLowerCase();
@@ -269,6 +298,11 @@ function AppProvider({ children }) {
       showSnack(`🔀 "${item.name}" · ${fmtQU(ex.qty, ex.unit)} + ${fmtQU(item.qty, item.unit)} → ${fmtQU(merged.qty, merged.unit)}`);
     } else if (merges.length > 1) {
       showSnack(`🔀 ${merges.length} ingrédients fusionnés avec la liste`);
+    }
+    if (incompatibles.length === 1) {
+      showSnack(`⚠️ "${incompatibles[0].name}" ajouté séparément · unités incompatibles`);
+    } else if (incompatibles.length > 1) {
+      showSnack(`⚠️ ${incompatibles.length} articles ajoutés séparément · unités incompatibles`);
     }
     setShopping(p => items.reduce((list, item) => mergeOrAdd(list, item), p));
   };
@@ -293,16 +327,22 @@ function AppProvider({ children }) {
     setMeals(p => p.map(m => m.id === id ? { ...m, done: !m.done } : m));
 
   const deleteMeal = id => {
-    const meal = meals.find(m => m.id === id);
+    const meal     = meals.find(m => m.id === id);
     if (!meal) return;
     const hasOther = meals.some(m => m.id !== id && m.weekKey === meal.weekKey && m.recipeId === meal.recipeId);
+    const nItems   = hasOther ? 0 : shopping.filter(s => s.fromRecipeId === meal.recipeId).length;
     if (!hasOther) setShopping(p => p.filter(s => s.fromRecipeId !== meal.recipeId));
     setMeals(p => p.filter(m => m.id !== id));
+    const name = recipes.find(r => r.id === meal.recipeId)?.name || 'Repas';
+    const suffix = nItems > 0 ? ` · ${nItems} article${nItems>1?'s':''} de courses retirés` : '';
+    showSnack(`"${name}" retiré du planning${suffix}`);
   };
 
   const duplicateWeek = (from, to) => {
     const src = meals.filter(m => m.weekKey === from);
+    if (!src.length) { showSnack('ℹ️ Aucun repas à dupliquer sur cette semaine'); return; }
     setMeals(p => [...p, ...src.map(m => ({ ...m, id: genId(), weekKey: to, done: false, addedAt: ts() }))]);
+    showSnack(`✅ ${src.length} repas dupliqués`);
   };
 
   /* ── Courses ── */
@@ -318,6 +358,7 @@ function AppProvider({ children }) {
     if (existing) {
       const merged = tryMergeQty(existing.qty, existing.unit, newItem.qty, newItem.unit);
       if (merged) showSnack(`🔀 "${name}" · ${fmtQU(existing.qty, existing.unit)} + ${fmtQU(newItem.qty, newItem.unit)} → ${fmtQU(merged.qty, merged.unit)}`);
+      else         showSnack(`⚠️ "${name}" ajouté séparément · unités incompatibles`);
     }
     setShopping(p => mergeOrAdd(p, newItem));
   };
@@ -337,8 +378,18 @@ function AppProvider({ children }) {
     showSnack(label, () => setShopping(p => [...p, ...toDelete]));
   };
 
-  const clearChecked = () => setShopping(p => p.filter(s => !s.checked));
-  const clearAll     = () => setShopping([]);
+  const clearChecked = () => {
+    const toDelete = shopping.filter(s => s.checked);
+    if (!toDelete.length) { showSnack('ℹ️ Aucun article coché'); return; }
+    setShopping(p => p.filter(s => !s.checked));
+    showSnack(`${toDelete.length} article${toDelete.length>1?'s':''} cochés supprimés`, () => setShopping(p => [...p, ...toDelete]));
+  };
+  const clearAll = () => {
+    if (!shopping.length) { showSnack('ℹ️ La liste est déjà vide'); return; }
+    const toDelete = [...shopping];
+    setShopping([]);
+    showSnack(`Liste vidée (${toDelete.length} article${toDelete.length>1?'s':''})`, () => setShopping(toDelete));
+  };
 
   const updateShoppingItem = (id, patch) =>
     setShopping(p => p.map(s => s.id === id ? { ...s, ...patch } : s));
@@ -356,9 +407,13 @@ function AppProvider({ children }) {
   const addCat = ({ id = genId(), name, emoji='📦', kw=[] }) =>
     setCats(p => [...p, { id, name, emoji, kw, order: p.length }]);
   const deleteCat = id => {
-    const fb = cats.find(c => c.id !== id && (!c.kw || c.kw.length === 0))?.id ?? cats.find(c => c.id !== id)?.id;
+    const cat      = cats.find(c => c.id === id);
+    const fb       = cats.find(c => c.id !== id && (!c.kw || c.kw.length === 0))?.id ?? cats.find(c => c.id !== id)?.id;
+    const nMoved   = shopping.filter(s => s.categoryId === id).length;
     setCats(p => p.filter(c => c.id !== id));
     setShopping(p => p.map(s => s.categoryId === id ? { ...s, categoryId: fb } : s));
+    const suffix = nMoved > 0 ? ` · ${nMoved} article${nMoved>1?'s':''} déplacés` : '';
+    showSnack(`"${cat?.name || 'Catégorie'}" supprimée${suffix}`);
   };
   const updateCat   = c    => setCats(p => p.map(x => x.id === c.id ? c : x));
   const reorderCats = list => setCats(list.map((c, i) => ({ ...c, order: i })));
@@ -795,7 +850,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 //  PLANNING TAB
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
-  const { meals, recipes, cats, addMeal, addIngredientsFromRecipe, duplicateWeek } = useApp();
+  const { meals, recipes, cats, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack } = useApp();
   const [pickerWeek,   setPickerWeek]   = useState(null);
   const [dupWeek,      setDupWeek]      = useState(null);
   const [filterData,   setFilterData]   = useState(null);
@@ -984,6 +1039,7 @@ function PlanningTab() {
             // Ajoute les repas sans ingrédients
             filterData.selections.forEach(({ recipe, persons: p }) => addMeal(filterData.weekKey, recipe.id, p));
             setFilterData(null);
+            showSnack('ℹ️ Repas ajouté · ingrédients non ajoutés à la liste');
           }}
           onCancel={() => setFilterData(null)}
           onConfirm={(selectedByRecipe) => {
@@ -1015,6 +1071,8 @@ function PlanningTab() {
                 if (ids.length) addIngredientsFromRecipe(recipe, p, ids);
               });
             }
+            const totalAdded = filterData.selections.reduce((s, { recipe }) => s + (selectedByRecipe[recipe.id]?.length || 0), 0);
+            if (totalAdded === 0) showSnack('ℹ️ Repas ajouté · aucun ingrédient sélectionné');
             setFilterData(null);
           }}
         />
@@ -1463,7 +1521,7 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
 }
 
 function AssignToWeekModal({ recipe, viewPortions, onClose }) {
-  const { addMeal, addIngredientsFromRecipe, cats } = useApp();
+  const { addMeal, addIngredientsFromRecipe, cats, showSnack } = useApp();
   const currentWeek = getISOWeekKey();
   const [selWeek,      setSelWeek]      = useState(currentWeek);
   const [persons,      setPersons]      = useState(viewPortions || 6);
@@ -1475,7 +1533,11 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
 
   const doAdd = (ingredientIds = null, catOverrides = {}) => {
     addMeal(selWeek, recipe.id, persons);
-    if (ingredientIds?.length) addIngredientsFromRecipe(recipe, persons, ingredientIds, catOverrides);
+    if (ingredientIds?.length) {
+      addIngredientsFromRecipe(recipe, persons, ingredientIds, catOverrides);
+    } else {
+      showSnack('ℹ️ Recette ajoutée · ingrédients non ajoutés à la liste');
+    }
     setDone(true);
     setTimeout(onClose, 900);
   };
@@ -3525,19 +3587,19 @@ function SettingsTab() {
 
   // ── Export JSON ──────────────────────────────────────
   const handleExport = () => {
-    const data = {
-      version: VERSION,
-      exportDate: new Date().toISOString(),
-      recipes, meals, shopping, cats, settings,
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `meal-plan-${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showSnack('✅ Sauvegarde exportée');
+    try {
+      const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `meal-plan-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showSnack('✅ Sauvegarde exportée');
+    } catch(e) {
+      showSnack(`❌ Export impossible · ${e.message}`);
+    }
   };
 
   // ── Import JSON ──────────────────────────────────────
@@ -3548,14 +3610,16 @@ function SettingsTab() {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        if (!data.recipes && !data.cats) throw new Error('Fichier invalide');
+        if (!data.recipes && !data.cats) throw new Error('format invalide');
         importAllData(data);
         showSnack('✅ Données restaurées avec succès');
         setImportErr('');
-      } catch {
+      } catch(e) {
         setImportErr('Fichier JSON invalide ou corrompu.');
+        showSnack(`❌ Restauration impossible · ${e.message}`);
       }
     };
+    reader.onerror = () => showSnack('❌ Impossible de lire le fichier');
     reader.readAsText(file);
     e.target.value = '';
   };
@@ -3664,6 +3728,8 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.5.8</span> — Snacks succès/erreur sur toutes les actions · Détection quota localStorage<br/>
+            <span style={{ color:C.accent }}>2.5.7</span> — Snacks d'erreur/info · unités incompatibles · ingrédients non ajoutés<br/>
             <span style={{ color:C.accent }}>2.5.6</span> — Info-bulles fusion · Info-bulles mot-clé automatique<br/>
             <span style={{ color:C.accent }}>2.5.5</span> — Fusion avec conversion d'unités (g/kg, ml/cl/L) · Fusion sur articles recette<br/>
             <span style={{ color:C.accent }}>2.5.4</span> — Fusion automatique des doublons dans la liste · Mise à jour mot-clé à l'édition de catégorie<br/>
@@ -3687,7 +3753,7 @@ function SettingsTab() {
 }
 
 function CategoryEditModal({ cat, onClose }) {
-  const { updateCat } = useApp();
+  const { updateCat, showSnack } = useApp();
   const [emoji, setEmoji] = useState(cat.emoji || '📦');
   const [name,  setName]  = useState(cat.name || '');
   const [kwStr, setKwStr] = useState((cat.kw || []).join(', '));
@@ -3696,6 +3762,7 @@ function CategoryEditModal({ cat, onClose }) {
   const save = () => {
     if (!name.trim()) return;
     updateCat({ ...cat, emoji, name:name.trim(), kw:kwStr.split(/[,\n]+/).map(k=>k.trim().toLowerCase()).filter(Boolean) });
+    showSnack('✅ Catégorie mise à jour');
     onClose();
   };
 
@@ -3730,7 +3797,7 @@ function CategoryEditModal({ cat, onClose }) {
 }
 
 function CategoryAddModal({ onClose }) {
-  const { addCat } = useApp();
+  const { addCat, showSnack } = useApp();
   const [emoji, setEmoji] = useState('📦');
   const [name,  setName]  = useState('');
   const [kwStr, setKwStr] = useState('');
@@ -3739,6 +3806,7 @@ function CategoryAddModal({ onClose }) {
   const create = () => {
     if (!name.trim()) return;
     addCat({ name:name.trim(), emoji, kw:kwStr.split(/[,\n]+/).map(k=>k.trim().toLowerCase()).filter(Boolean) });
+    showSnack(`✅ Catégorie "${name.trim()}" créée`);
     onClose();
   };
 
