@@ -1,6 +1,6 @@
 {
   "name": "meal-plan",
-  "version": "2.5.1",
+  "version": "2.5.5",
   "private": true,
   "scripts": {
     "dev": "vite",

@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.5.2"; // v17
+const VERSION = "2.5.5"; // v20
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -109,6 +109,58 @@ function getUncatIngredients(recipe, ingIds, cats) {
 }
 
 // ══════════════════════════════════════════════════════
+//  FUSION D'ARTICLES — conversion d'unités
+// ══════════════════════════════════════════════════════
+
+/** Facteurs de conversion vers l'unité de base (g pour le poids, ml pour le volume) */
+const UNIT_CONV = {
+  g:  { factor: 1,    type: 'weight' },
+  kg: { factor: 1000, type: 'weight' },
+  ml: { factor: 1,    type: 'volume' },
+  cl: { factor: 10,   type: 'volume' },
+  l:  { factor: 1000, type: 'volume' }, // 'L' normalisé en lowercase
+};
+
+/** Exprime une quantité en base (g ou ml) dans l'unité la plus lisible */
+function bestUnit(base, type) {
+  if (type === 'weight') {
+    return base >= 1000
+      ? { qty: Math.round(base / 100) / 10, unit: 'kg' }
+      : { qty: Math.round(base * 10) / 10,  unit: 'g'  };
+  }
+  if (base >= 1000) return { qty: Math.round(base / 100) / 10, unit: 'L'  };
+  if (base >= 100)  return { qty: Math.round(base / 10)  / 10, unit: 'cl' };
+  return             { qty: Math.round(base * 10)  / 10, unit: 'ml' };
+}
+
+/**
+ * Tente de fusionner deux quantités (unités identiques ou compatibles poids/volume).
+ * Retourne { qty, unit } si possible, null sinon.
+ */
+function tryMergeQty(eQty, eUnit, nQty, nUnit) {
+  const eu = (eUnit || '').trim().toLowerCase();
+  const nu = (nUnit || '').trim().toLowerCase();
+  if (eu === nu) return { qty: Math.round((eQty + nQty) * 10) / 10, unit: eUnit || nUnit };
+  const ec = UNIT_CONV[eu], nc = UNIT_CONV[nu];
+  if (ec && nc && ec.type === nc.type)
+    return bestUnit(eQty * ec.factor + nQty * nc.factor, ec.type);
+  return null;
+}
+
+/**
+ * Insère ou fusionne `newItem` dans la liste de courses.
+ * Fusion si même nom (insensible à la casse), article non barré, et unités compatibles.
+ */
+function mergeOrAdd(list, newItem) {
+  const normName = newItem.name.trim().toLowerCase();
+  const existing = list.find(s => !s.checked && s.name.trim().toLowerCase() === normName);
+  if (!existing) return [...list, newItem];
+  const merged = tryMergeQty(existing.qty, existing.unit, newItem.qty, newItem.unit);
+  if (merged) return list.map(s => s.id === existing.id ? { ...s, qty: merged.qty, unit: merged.unit } : s);
+  return [...list, newItem]; // unités incompatibles → article séparé
+}
+
+// ══════════════════════════════════════════════════════
 //  DONNÉES INITIALES (démo)
 // ══════════════════════════════════════════════════════
 
@@ -196,7 +248,8 @@ function AppProvider({ children }) {
         sortOrder: ts() + Math.random(),
         addedAt: ts(),
       }));
-    if (items.length) setShopping(p => [...p, ...items]);
+    if (items.length)
+      setShopping(p => items.reduce((list, item) => mergeOrAdd(list, item), p));
   };
 
   const updateMealPersons = (id, delta) => {
@@ -232,12 +285,14 @@ function AppProvider({ children }) {
   };
 
   /* ── Courses ── */
-  const addShoppingItem = (name, qty, unit, catId) =>
-    setShopping(p => [...p, {
+  const addShoppingItem = (name, qty, unit, catId) => {
+    const newItem = {
       id: genId(), name, qty: parseFloat(qty)||0, unit: unit||'',
       categoryId: catId ?? categorize(name, cats),
       fromRecipeId: null, checked: false, sortOrder: ts(), addedAt: ts(),
-    }]);
+    };
+    setShopping(p => mergeOrAdd(p, newItem));
+  };
 
   const deleteShoppingItem = id => {
     const item = shopping.find(s => s.id === id);
@@ -2641,7 +2696,9 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
   const handleCreateAndAdd = () => {
     if (!newName.trim()) return;
     const newId = genId();
-    addCat({ id: newId, name: newName.trim(), emoji: newEmoji, kw: [] });
+    // Ajoute le nom de l'article comme premier mot-clé de la nouvelle catégorie
+    const autoKw = item.name.trim().toLowerCase();
+    addCat({ id: newId, name: newName.trim(), emoji: newEmoji, kw: autoKw ? [autoKw] : [] });
     onConfirm(newId);
   };
 
@@ -2725,7 +2782,7 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
 //  COURSES TAB
 // ══════════════════════════════════════════════════════
 function ShoppingTab() {
-  const { shopping, cats, addShoppingItem, deleteItemsByCategory, clearChecked, clearAll, showSnack, reorderCats } = useApp();
+  const { shopping, cats, addShoppingItem, deleteItemsByCategory, clearChecked, clearAll, showSnack, reorderCats, updateCat } = useApp();
   const [newName,  setNewName]  = useState('');
   const [newQty,   setNewQty]   = useState('');
   const [newUnit,  setNewUnit]  = useState('');
@@ -2963,6 +3020,14 @@ function ShoppingTab() {
           item={catAssignItem}
           onConfirm={(catId) => {
             addShoppingItem(catAssignItem.name, catAssignItem.qty, catAssignItem.unit, catId);
+            // Auto-ajoute le nom comme mot-clé dans la catégorie existante (la nouvelle catégorie
+            // reçoit déjà le mot-clé directement dans handleCreateAndAdd de CategoryAssignModal)
+            const cat = cats.find(c => c.id === catId);
+            if (cat) {
+              const kw = catAssignItem.name.trim().toLowerCase();
+              const already = cat.kw?.some(k => matchesKeyword(kw, k.toLowerCase()));
+              if (kw && !already) updateCat({ ...cat, kw: [...(cat.kw || []), kw] });
+            }
             setNewName(''); setNewQty(''); setNewUnit('');
             setCatAssignItem(null);
           }}
@@ -3092,7 +3157,7 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
 }
 
 function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd }) {
-  const { deleteShoppingItem, updateShoppingItem, cats } = useApp();
+  const { deleteShoppingItem, updateShoppingItem, updateCat, cats } = useApp();
   const [editing,  setEditing]  = useState(false);
   const [editName, setEditName] = useState(item.name);
   const [editQty,  setEditQty]  = useState(item.qty || '');
@@ -3102,10 +3167,21 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
   const sortedCats = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
 
   const saveEdit = () => {
-    if (editName.trim()) updateShoppingItem(item.id, {
-      name: editName.trim(), qty: parseFloat(editQty)||0,
-      unit: editUnit, categoryId: editCat,
-    });
+    if (editName.trim()) {
+      updateShoppingItem(item.id, {
+        name: editName.trim(), qty: parseFloat(editQty)||0,
+        unit: editUnit, categoryId: editCat,
+      });
+      // Si la catégorie a changé, ajoute le nom comme mot-clé dans la nouvelle catégorie
+      if (editCat && editCat !== item.categoryId) {
+        const cat = cats.find(c => c.id === editCat);
+        if (cat) {
+          const kw = editName.trim().toLowerCase();
+          const already = cat.kw?.some(k => matchesKeyword(kw, k.toLowerCase()));
+          if (kw && !already) updateCat({ ...cat, kw: [...(cat.kw || []), kw] });
+        }
+      }
+    }
     setEditing(false);
   };
 
@@ -3553,6 +3629,9 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.5.5</span> — Fusion avec conversion d'unités (g/kg, ml/cl/L) · Fusion sur articles recette<br/>
+            <span style={{ color:C.accent }}>2.5.4</span> — Fusion automatique des doublons dans la liste · Mise à jour mot-clé à l'édition de catégorie<br/>
+            <span style={{ color:C.accent }}>2.5.3</span> — Mot-clé auto lors de l'assignation d'un article à une catégorie<br/>
             <span style={{ color:C.accent }}>2.5.2</span> — Fix double ajout repas/ingrédients depuis fiche recette<br/>
             <span style={{ color:C.accent }}>2.5.1</span> — Import HTML brut (Overblog, Canalblog…) · Fix @type URL schema · Extraction JSON Claude robustifiée<br/>
             <span style={{ color:C.accent }}>2.5.0</span> — Ouvrir recette depuis planning · UX courses · Corrections
