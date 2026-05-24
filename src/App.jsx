@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.5.8"; // v23
+const VERSION = "2.6.0"; // v25
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -85,9 +85,44 @@ function shiftWeek(key, n) {
 }
 
 /** Vérifie qu'un mot-clé correspond à un nom entier (pas une sous-chaîne d'un mot) */
+/**
+ * Génère les variantes singulier/pluriel d'un mot-clé français.
+ * Couvre les cas courants en alimentation : -s, -x, -eau/-eaux, -al/-aux.
+ */
+function kwVariants(kw) {
+  const set = new Set([kw]);
+  const w   = kw.toLowerCase();
+  // Pluriel → singulier
+  if      (w.endsWith('eaux'))                      set.add(kw.slice(0, -1));          // poireaux → poireau
+  else if (w.endsWith('aux') && w.length > 4)       set.add(kw.slice(0, -3) + 'al'); // animaux → animal
+  else if (w.endsWith('s')   && w.length > 2)       set.add(kw.slice(0, -1));          // pommes → pomme
+  // Singulier → pluriel (eau/al prennent x/aux, pas s)
+  const getsX = w.endsWith('eau') || (w.endsWith('al') && !w.endsWith('eal'));
+  if      (w.endsWith('eau'))                        set.add(kw + 'x');                 // poireau → poireaux
+  else if (w.endsWith('al')  && !w.endsWith('eal')) set.add(kw.slice(0, -2) + 'aux'); // animal → animaux
+  if (!getsX && !w.endsWith('s') && !w.endsWith('x') && !w.endsWith('z')) set.add(kw + 's'); // pomme → pommes
+  return [...set];
+}
+
+/**
+ * Normalise un nom d'article pour la comparaison singulier/pluriel
+ * (utilisé dans la fusion : "pomme" et "pommes" → même base "pomme").
+ */
+function stemFrName(name) {
+  // Normalise mot par mot, supprime les 's' finaux sauf pour les mots très courts
+  return name.toLowerCase().trim()
+    .replace(/\b([a-zà-ÿ]{3,})s\b/gi, (_, stem) => stem)   // pommes → pomme, tomates → tomate
+    .replace(/\b([a-zà-ÿ]{3,})eaux\b/gi, (_, stem) => stem + 'eau') // poireaux → poireau
+    .trim();
+}
+
 function matchesKeyword(name, kw) {
-  const e = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp('(?<![a-zA-ZÀ-ÿ0-9])' + e + '(?![a-zA-ZÀ-ÿ0-9])', 'i').test(name);
+  // Essaie toutes les variantes singulier/pluriel du mot-clé
+  for (const variant of kwVariants(kw)) {
+    const e = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp('(?<![a-zA-ZÀ-ÿ0-9])' + e + '(?![a-zA-ZÀ-ÿ0-9])', 'i').test(name)) return true;
+  }
+  return false;
 }
 
 function categorize(name, cats) {
@@ -158,8 +193,8 @@ function fmtQU(qty, unit) {
  * Fusion si même nom (insensible à la casse), article non barré, et unités compatibles.
  */
 function mergeOrAdd(list, newItem) {
-  const normName = newItem.name.trim().toLowerCase();
-  const existing = list.find(s => !s.checked && s.name.trim().toLowerCase() === normName);
+  const normName = stemFrName(newItem.name.trim());
+  const existing = list.find(s => !s.checked && stemFrName(s.name.trim()) === normName);
   if (!existing) return [...list, newItem];
   const merged = tryMergeQty(existing.qty, existing.unit, newItem.qty, newItem.unit);
   if (merged) return list.map(s => s.id === existing.id ? { ...s, qty: merged.qty, unit: merged.unit } : s);
@@ -1743,6 +1778,7 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
           {recipe.cookTimeMinutes > 0 && <Chip>⏱ {recipe.cookTimeMinutes} min</Chip>}
           {timesCookedCount > 0 && <Chip color={C.green}>✅ Cuisiné {timesCookedCount}×</Chip>}
           {recipe.favorite && <Chip color={C.orange}>⭐ Favori</Chip>}
+          <WeeksBadge recipeId={recipe.id} />
         </div>
 
         {/* Tags */}
@@ -1850,6 +1886,99 @@ function Chip({ children, color }) {
     <span style={{ background:C.border, color:color||C.muted, fontSize:12, padding:'4px 12px', borderRadius:20, fontWeight:500 }}>
       {children}
     </span>
+  );
+}
+
+/**
+ * Badge cliquable affichant la prochaine (ou dernière) semaine planifiée.
+ * Un tap ouvre un BottomSheet listant toutes les semaines.
+ */
+function WeeksBadge({ recipeId }) {
+  const { meals } = useApp();
+  const [open, setOpen] = useState(false);
+  const currentWeek = getISOWeekKey();
+
+  // Semaines uniques : futures/en cours d'abord (proche → loin), puis passées (récente → ancienne)
+  const weeks = useMemo(() => {
+    const seen = new Set();
+    return meals
+      .filter(m => m.recipeId === recipeId)
+      .map(m => m.weekKey)
+      .filter(w => { if (seen.has(w)) return false; seen.add(w); return true; })
+      .sort((a, b) => {
+        const af = a >= currentWeek, bf = b >= currentWeek;
+        if (af !== bf) return af ? -1 : 1;       // futur/présent avant passé
+        return af ? a.localeCompare(b) : b.localeCompare(a); // futur: croissant; passé: décroissant
+      });
+  }, [meals, recipeId, currentWeek]);
+
+  if (!weeks.length) return null;
+
+  const top  = weeks[0];
+  const rest = weeks.length - 1;
+  const isCurrent  = top === currentWeek;
+  const isFuture   = top > currentWeek;
+  const weekStart  = getWeekStart(top);
+  const shortLabel = isCurrent
+    ? 'Cette semaine'
+    : weekStart.toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
+
+  return (
+    <>
+      <button onClick={() => setOpen(true)} style={{
+        background: C.accentBg, border:`1px solid ${C.accent}55`,
+        color: C.accent, fontSize:12, fontWeight:600,
+        padding:'4px 10px', borderRadius:20, cursor:'pointer',
+        display:'flex', alignItems:'center', gap:5,
+      }}>
+        📅 {shortLabel}
+        {rest > 0 && (
+          <span style={{
+            background:C.accent, color:'#fff',
+            borderRadius:10, fontSize:10, fontWeight:700,
+            padding:'0 5px', lineHeight:'16px',
+          }}>+{rest}</span>
+        )}
+      </button>
+
+      {open && (
+        <BottomSheet title="Semaines planifiées" onClose={() => setOpen(false)}>
+          <div style={{ padding:'8px 16px 20px' }}>
+            {weeks.map(w => {
+              const past    = w < currentWeek;
+              const current = w === currentWeek;
+              const future  = w > currentWeek;
+              const [, wn]  = w.split('-W');
+              return (
+                <div key={w} style={{
+                  display:'flex', alignItems:'center', gap:12,
+                  padding:'10px 0', borderBottom:`1px solid ${C.border}`,
+                }}>
+                  <span style={{ fontSize:16, width:22, textAlign:'center', flexShrink:0 }}>
+                    {current ? '▶️' : past ? '✅' : '📅'}
+                  </span>
+                  <div style={{ flex:1 }}>
+                    <div style={{
+                      fontSize:13, fontWeight: current ? 700 : 500,
+                      color: past ? C.muted : current ? C.accent : C.text,
+                    }}>
+                      {current ? 'Cette semaine' : getWeekRange(w)}
+                    </div>
+                    <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>Semaine {parseInt(wn)}</div>
+                  </div>
+                  <span style={{
+                    fontSize:11, fontWeight:600, flexShrink:0,
+                    color: current ? C.accent : past ? C.muted : C.green,
+                  }}>
+                    {current ? 'En cours' : past ? 'Passé' : 'Planifié'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </BottomSheet>
+      )}
+    </>
   );
 }
 
@@ -3728,6 +3857,8 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.6.0</span> — Badge semaines planifiées dans la fiche recette<br/>
+            <span style={{ color:C.accent }}>2.5.9</span> — Gestion singulier/pluriel français (mots-clés + fusion)<br/>
             <span style={{ color:C.accent }}>2.5.8</span> — Snacks succès/erreur sur toutes les actions · Détection quota localStorage<br/>
             <span style={{ color:C.accent }}>2.5.7</span> — Snacks d'erreur/info · unités incompatibles · ingrédients non ajoutés<br/>
             <span style={{ color:C.accent }}>2.5.6</span> — Info-bulles fusion · Info-bulles mot-clé automatique<br/>
