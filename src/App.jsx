@@ -3,7 +3,56 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.7.0"; // v32
+const VERSION = "2.7.1"; // v33
+
+// ══════════════════════════════════════════════════════
+//  GESTION DU BOUTON RETOUR ANDROID (WebView)
+//  Chaque modal/overlay enregistre son handler via useBackHandler.
+//  history.pushState crée une entrée ; popstate la consomme au retour.
+// ══════════════════════════════════════════════════════
+let   _backReady  = false;
+let   _skipNext   = false;
+let   _backIdCtr  = 0;
+const _backMap    = new Map(); // id → () => void
+
+function _initAndroidBack() {
+  if (_backReady || typeof window === 'undefined') return;
+  _backReady = true;
+  window.addEventListener('popstate', (e) => {
+    if (_skipNext) { _skipNext = false; return; }
+    const id = e.state?._bid;
+    if (id && _backMap.has(id)) {
+      const fn = _backMap.get(id);
+      _backMap.delete(id);
+      fn();
+    }
+  });
+}
+
+/**
+ * Enregistre un handler "fermeture" pour le bouton retour Android.
+ * enabled=false → ne fait rien (utile pour les overlays conditionnels).
+ */
+function useBackHandler(onClose, enabled = true) {
+  const ref = useRef(onClose);
+  ref.current = onClose;
+  useEffect(() => {
+    if (!enabled) return;
+    _initAndroidBack();
+    const id = ++_backIdCtr;
+    window.history.pushState({ _bid: id }, '');
+    _backMap.set(id, () => ref.current());
+    return () => {
+      if (_backMap.has(id)) {
+        // Fermeture via bouton (pas via retour) : consomme l'entrée proprement
+        _backMap.delete(id);
+        _skipNext = true;
+        window.history.back();
+      }
+      // Sinon : déjà fermé via retour (popstate l'a effacé), rien à faire
+    };
+  }, [enabled]);
+}
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -526,6 +575,7 @@ function Btn({ onClick, children, variant='default', small, disabled, style }) {
 }
 
 function BottomSheet({ title, onClose, children }) {
+  useBackHandler(onClose);
   return (
     <div onClick={e => e.target===e.currentTarget && onClose()} style={{
       position:'fixed', inset:0, zIndex:1000, background:'rgba(0,0,0,0.65)',
@@ -706,6 +756,7 @@ function BottomNav({ tab, setTab }) {
 //  Permet de choisir quels ingrédients ajouter aux courses
 // ══════════════════════════════════════════════════════
 function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
+  useBackHandler(onCancel);
   const { cats } = useApp();
 
   // Construit la liste plate de tous les ingrédients avec catégorie
@@ -1279,6 +1330,9 @@ function MealItem({ meal, recipe, onViewRecipe }) {
 
   const openNote = () => { setDraftNote(meal.note || ''); setNoteOpen(true); };
   const saveNote = () => { updateMeal(meal.id, { note: draftNote.trim() }); setNoteOpen(false); };
+
+  // Bouton retour Android ferme la note si ouverte
+  useBackHandler(() => setNoteOpen(false), noteOpen);
 
   // Indicateur de re-planification : même recette la semaine précédente
   const prevWeek   = shiftWeek(meal.weekKey, -1);
@@ -2021,6 +2075,7 @@ function RecipeCard({ recipe, onClick, onDelete }) {
 }
 
 function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
+  useBackHandler(onClose);
   const { meals, showSnack, updateRecipe } = useApp();
   const [checked,     setChecked]     = useState(new Set());
   const [confirmDel,  setConfirmDel]  = useState(false);
@@ -2616,6 +2671,7 @@ function parseHtmlContent(doc) {
 }
 
 function RecipeEditor({ recipe, onClose, onSave }) {
+  useBackHandler(onClose);
   const { recipes } = useApp();
   const [form, setForm] = useState({
     ...recipe,
@@ -3617,6 +3673,7 @@ function ShoppingTab() {
 }
 
 function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
+  useBackHandler(onExit);
   // Seulement les articles non cochés, groupés par catégorie
   const unchecked = shopping.filter(s => !s.checked);
   const total     = shopping.length;       // total initial (ne change pas pendant la session)
@@ -4362,6 +4419,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.7.1</span> — Bouton retour Android (toutes modals/overlays)<br/>
             <span style={{ color:C.accent }}>2.7.0</span> — fromMealId (rescaling précis) · deleteRecipe undo · RecipeCard direct delete · RecipeDetail favori inline · null guards onEdit/onDelete · MIN_YEAR dynamique · weeksToShow · recipeScore O(N)<br/>
             <span style={{ color:C.accent }}>2.6.6</span> — Alerte re-planification semaine consécutive<br/>
             <span style={{ color:C.accent }}>2.6.5</span> — Suggestions recettes (tri ancienneté + filtres tags) · 🎲 tirage pondéré<br/>
