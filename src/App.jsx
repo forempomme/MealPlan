@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.6.6"; // v31
+const VERSION = "2.7.0"; // v32
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -281,25 +281,36 @@ function AppProvider({ children }) {
   const updateRecipe = d => { setRecipes(p => p.map(r => r.id === d.id ? d : r)); showSnack('✅ Recette mise à jour'); };
   const deleteRecipe = id => {
     const recipe        = recipes.find(r => r.id === id);
-    const nMeals        = meals.filter(m => m.recipeId     === id).length;
-    const nShopping     = shopping.filter(s => s.fromRecipeId === id).length;
+    const removedMeals  = meals.filter(m => m.recipeId === id);
+    const removedShop   = shopping.filter(s =>
+      s.fromRecipeId === id || removedMeals.some(m => m.id === s.fromMealId)
+    );
     setRecipes(p  => p.filter(r => r.id !== id));
     setMeals(p    => p.filter(m => m.recipeId !== id));
-    setShopping(p => p.filter(s => s.fromRecipeId !== id));
+    setShopping(p => p.filter(s =>
+      s.fromRecipeId !== id && !removedMeals.some(m => m.id === s.fromMealId)
+    ));
     const parts = [];
-    if (nMeals    > 0) parts.push(`${nMeals} repas`);
-    if (nShopping > 0) parts.push(`${nShopping} courses`);
-    showSnack(`🗑 "${recipe?.name || 'Recette'}" supprimée${parts.length ? ' · ' + parts.join(', ') + ' retirés' : ''}`);
+    if (removedMeals.length > 0) parts.push(`${removedMeals.length} repas`);
+    if (removedShop.length  > 0) parts.push(`${removedShop.length} courses`);
+    showSnack(
+      `🗑 "${recipe?.name || 'Recette'}" supprimée${parts.length ? ' · ' + parts.join(', ') + ' retirés' : ''}`,
+      () => {
+        setRecipes(p  => [...p, recipe]);
+        setMeals(p    => [...p, ...removedMeals]);
+        if (removedShop.length) setShopping(p => [...p, ...removedShop]);
+      }
+    );
   };
 
   /* ── Repas ── */
   const addMeal = (weekKey, recipeId, persons) => {
-    // N'ajoute QUE le repas au planning — les ingrédients sont ajoutés
-    // séparément via addIngredientsFromRecipe après sélection utilisateur.
-    setMeals(p => [...p, { id: genId(), weekKey, recipeId, persons, done: false, note: '', addedAt: ts() }]);
+    const id = genId();
+    setMeals(p => [...p, { id, weekKey, recipeId, persons, done: false, note: '', addedAt: ts() }]);
+    return id; // renvoyé pour lier les ingrédients de courses au repas précis (fromMealId)
   };
 
-  const addIngredientsFromRecipe = (recipe, persons, selectedIngIds, catOverrides = {}) => {
+  const addIngredientsFromRecipe = (recipe, persons, selectedIngIds, catOverrides = {}, mealId = null) => {
     const scale = persons / (recipe.portions || 4);
     const items = (recipe.ingredients || [])
       .filter(ing => selectedIngIds.includes(ing.id))
@@ -308,7 +319,8 @@ function AppProvider({ children }) {
         qty:  ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0,
         unit: ing.unit || '',
         categoryId:  catOverrides[ing.id] ?? categorize(ing.name, cats),
-        fromRecipeId: recipe.id,
+        fromRecipeId: recipe.id,  // affiché dans badge 📅 + compat données existantes
+        fromMealId:   mealId,     // rescaling/suppression précis par repas
         checked: false,
         sortOrder: ts() + Math.random(),
         addedAt: ts(),
@@ -350,11 +362,11 @@ function AppProvider({ children }) {
     if (newPersons === oldPersons) return;
     setMeals(p => p.map(m => m.id === id ? { ...m, persons: newPersons } : m));
     const ratio = newPersons / oldPersons;
-    const affected = shopping.filter(s => s.fromRecipeId === meal.recipeId && s.qty > 0);
+    // fromMealId (nouveau) prioritaire sur fromRecipeId (legacy) pour éviter le rescaling croisé
+    const linked = s => s.fromMealId ? s.fromMealId === id : s.fromRecipeId === meal.recipeId;
+    const affected = shopping.filter(s => linked(s) && s.qty > 0);
     setShopping(p => p.map(s =>
-      s.fromRecipeId === meal.recipeId && s.qty
-        ? { ...s, qty: Math.round(s.qty * ratio * 10) / 10 }
-        : s
+      linked(s) && s.qty ? { ...s, qty: Math.round(s.qty * ratio * 10) / 10 } : s
     ));
     if (affected.length > 0)
       showSnack(`👥 ${oldPersons}→${newPersons} pers. · ${affected.length} quantité${affected.length>1?'s':''} de courses recalculée${affected.length>1?'s':''}`);
@@ -369,9 +381,10 @@ function AppProvider({ children }) {
   const deleteMeal = id => {
     const meal     = meals.find(m => m.id === id);
     if (!meal) return;
-    const hasOther       = meals.some(m => m.id !== id && m.weekKey === meal.weekKey && m.recipeId === meal.recipeId);
-    const removedShopping = hasOther ? [] : shopping.filter(s => s.fromRecipeId === meal.recipeId);
-    if (!hasOther) setShopping(p => p.filter(s => s.fromRecipeId !== meal.recipeId));
+    const hasOther = meals.some(m => m.id !== id && m.weekKey === meal.weekKey && m.recipeId === meal.recipeId);
+    const linked   = s => s.fromMealId ? s.fromMealId === id : s.fromRecipeId === meal.recipeId;
+    const removedShopping = hasOther ? [] : shopping.filter(linked);
+    if (!hasOther) setShopping(p => p.filter(s => !linked(s)));
     setMeals(p => p.filter(m => m.id !== id));
     const name   = recipes.find(r => r.id === meal.recipeId)?.name || 'Repas';
     const suffix = removedShopping.length > 0 ? ` · ${removedShopping.length} course${removedShopping.length>1?'s':''} retirée${removedShopping.length>1?'s':''}` : '';
@@ -896,7 +909,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 //  PLANNING TAB
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
-  const { meals, recipes, cats, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack } = useApp();
+  const { meals, recipes, cats, settings, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack } = useApp();
   const [pickerWeek,   setPickerWeek]   = useState(null);
   const [dupWeek,      setDupWeek]      = useState(null);
   const [filterData,   setFilterData]   = useState(null);
@@ -908,7 +921,13 @@ function PlanningTab() {
   const [year, setYear] = useState(currentYear);
   const currentWeekRef = useRef(null);
 
-  const MIN_YEAR = currentYear - 1;
+  const weeksToShow = settings.weeksToShow || 0;
+
+  // MIN_YEAR dynamique depuis les données (toujours au moins l'année précédente)
+  const MIN_YEAR = useMemo(() => {
+    const dataYears = meals.map(m => parseInt(m.weekKey.split('-W')[0])).filter(Boolean);
+    return dataYears.length ? Math.min(Math.min(...dataYears), currentYear - 1) : currentYear - 1;
+  }, [meals, currentYear]);
   const MAX_YEAR = 2050;
 
   // Semaines ISO de l'année sélectionnée
@@ -974,8 +993,8 @@ function PlanningTab() {
 
   return (
     <div style={{ position:'relative' }}>
-      {/* Bouton flottant */}
-      {btnVisible && (
+      {/* Bouton flottant "Semaine en cours" — masqué en mode rolling */}
+      {btnVisible && weeksToShow === 0 && (
         <div style={{
           position:'sticky', top:4, zIndex:50,
           display:'flex', justifyContent:'flex-end',
@@ -988,77 +1007,107 @@ function PlanningTab() {
         </div>
       )}
 
-      {/* ── Sélecteur d'année ── */}
-      <div style={{ position:'sticky', top: btnVisible ? 36 : 0, zIndex:40, background:C.card, borderBottom:`1px solid ${C.border}` }}>
-        {/* Ligne principale : flèches + année */}
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 14px' }}>
-          <button
-            onClick={() => year > MIN_YEAR && setYear(y => y - 1)}
-            disabled={year <= MIN_YEAR}
-            style={{
-              background:'none', border:`1px solid ${year > MIN_YEAR ? C.border : 'transparent'}`,
-              borderRadius:8, padding:'4px 12px', cursor: year > MIN_YEAR ? 'pointer' : 'default',
-              color: year > MIN_YEAR ? C.accent : C.border, fontSize:20, lineHeight:1,
-            }}>‹</button>
+      {weeksToShow > 0 ? (
+        /* ── Mode fenêtre glissante ── */
+        <>
+          <div style={{
+            position:'sticky', top:0, zIndex:40, background:C.card,
+            borderBottom:`1px solid ${C.border}`, padding:'9px 14px',
+            display:'flex', alignItems:'center', justifyContent:'space-between',
+          }}>
+            <span style={{ fontWeight:700, fontSize:14, color:C.text }}>📅 Planning</span>
+            <span style={{ fontSize:12, color:C.muted }}>
+              {weeksToShow} semaine{weeksToShow>1?'s':''} à venir
+            </span>
+          </div>
+          <div style={{ padding:'8px 12px 12px' }}>
+            {Array.from({ length: weeksToShow }, (_, i) => shiftWeek(currentWeek, i - 1)).map(wk => (
+              <div key={wk} ref={wk === currentWeek ? currentWeekRef : null}>
+                <WeekCard weekKey={wk} isCurrent={wk === currentWeek}
+                  onAdd={() => setPickerWeek(wk)}
+                  onDup={() => setDupWeek(wk)}
+                  onViewRecipe={setViewRecipe}
+                />
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        /* ── Mode vue annuelle (par défaut) ── */
+        <>
+          {/* ── Sélecteur d'année ── */}
+          <div style={{ position:'sticky', top: btnVisible ? 36 : 0, zIndex:40, background:C.card, borderBottom:`1px solid ${C.border}` }}>
+            {/* Ligne principale : flèches + année */}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 14px' }}>
+              <button
+                onClick={() => year > MIN_YEAR && setYear(y => y - 1)}
+                disabled={year <= MIN_YEAR}
+                style={{
+                  background:'none', border:`1px solid ${year > MIN_YEAR ? C.border : 'transparent'}`,
+                  borderRadius:8, padding:'4px 12px', cursor: year > MIN_YEAR ? 'pointer' : 'default',
+                  color: year > MIN_YEAR ? C.accent : C.border, fontSize:20, lineHeight:1,
+                }}>‹</button>
 
-          <div style={{ textAlign:'center', flex:1 }}>
-            <span style={{
-              fontWeight:800, fontSize:21,
-              color: year === currentYear ? C.accent : C.text,
-              letterSpacing:'-0.02em',
-            }}>{year}</span>
-            {year === currentYear && (
-              <span style={{
-                marginLeft:7, fontSize:10, fontWeight:600,
-                background:C.accentBg, color:C.accent,
-                padding:'2px 8px', borderRadius:10,
-                border:`1px solid ${C.accent}33`,
-                verticalAlign:'middle',
-              }}>en cours</span>
-            )}
-            {year !== currentYear && (
-              <span style={{ marginLeft:6, fontSize:11, color:C.muted, verticalAlign:'middle' }}>
-                {year < currentYear ? `${currentYear - year} an${currentYear-year>1?'s':''} avant` : `dans ${year - currentYear} an${year-currentYear>1?'s':''}`}
-              </span>
-            )}
+              <div style={{ textAlign:'center', flex:1 }}>
+                <span style={{
+                  fontWeight:800, fontSize:21,
+                  color: year === currentYear ? C.accent : C.text,
+                  letterSpacing:'-0.02em',
+                }}>{year}</span>
+                {year === currentYear && (
+                  <span style={{
+                    marginLeft:7, fontSize:10, fontWeight:600,
+                    background:C.accentBg, color:C.accent,
+                    padding:'2px 8px', borderRadius:10,
+                    border:`1px solid ${C.accent}33`,
+                    verticalAlign:'middle',
+                  }}>en cours</span>
+                )}
+                {year !== currentYear && (
+                  <span style={{ marginLeft:6, fontSize:11, color:C.muted, verticalAlign:'middle' }}>
+                    {year < currentYear ? `${currentYear - year} an${currentYear-year>1?'s':''} avant` : `dans ${year - currentYear} an${year-currentYear>1?'s':''}`}
+                  </span>
+                )}
+              </div>
+
+              <button
+                onClick={() => year < MAX_YEAR && setYear(y => y + 1)}
+                disabled={year >= MAX_YEAR}
+                style={{
+                  background:'none', border:`1px solid ${year < MAX_YEAR ? C.border : 'transparent'}`,
+                  borderRadius:8, padding:'4px 12px', cursor: year < MAX_YEAR ? 'pointer' : 'default',
+                  color: year < MAX_YEAR ? C.accent : C.border, fontSize:20, lineHeight:1,
+                }}>›</button>
+            </div>
+
+            {/* Raccourcis rapides */}
+            <div style={{ display:'flex', gap:5, padding:'0 10px 8px', overflowX:'auto' }}>
+              {shortcuts.map(y => (
+                <button key={y} onClick={() => setYear(y)} style={{
+                  padding:'3px 10px', borderRadius:20, flexShrink:0, cursor:'pointer',
+                  fontSize:11, fontWeight: y === year ? 700 : 400,
+                  background: y === year ? C.accentDk : 'transparent',
+                  color: y === year ? '#fff' : y === currentYear ? C.accent : C.muted,
+                  border:`1px solid ${y === year ? C.accentDk : y === currentYear ? C.accent+'55' : C.border}`,
+                }}>{y}</button>
+              ))}
+            </div>
           </div>
 
-          <button
-            onClick={() => year < MAX_YEAR && setYear(y => y + 1)}
-            disabled={year >= MAX_YEAR}
-            style={{
-              background:'none', border:`1px solid ${year < MAX_YEAR ? C.border : 'transparent'}`,
-              borderRadius:8, padding:'4px 12px', cursor: year < MAX_YEAR ? 'pointer' : 'default',
-              color: year < MAX_YEAR ? C.accent : C.border, fontSize:20, lineHeight:1,
-            }}>›</button>
-        </div>
-
-        {/* Raccourcis rapides */}
-        <div style={{ display:'flex', gap:5, padding:'0 10px 8px', overflowX:'auto' }}>
-          {shortcuts.map(y => (
-            <button key={y} onClick={() => setYear(y)} style={{
-              padding:'3px 10px', borderRadius:20, flexShrink:0, cursor:'pointer',
-              fontSize:11, fontWeight: y === year ? 700 : 400,
-              background: y === year ? C.accentDk : 'transparent',
-              color: y === year ? '#fff' : y === currentYear ? C.accent : C.muted,
-              border:`1px solid ${y === year ? C.accentDk : y === currentYear ? C.accent+'55' : C.border}`,
-            }}>{y}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Liste des semaines */}
-      <div style={{ padding:'8px 12px 12px' }}>
-        {allWeeks.map(wk => (
-          <div key={wk} ref={wk === currentWeek ? currentWeekRef : null}>
-            <WeekCard weekKey={wk} isCurrent={wk === currentWeek}
-              onAdd={() => setPickerWeek(wk)}
-              onDup={() => setDupWeek(wk)}
-              onViewRecipe={setViewRecipe}
-            />
+          {/* Liste des semaines */}
+          <div style={{ padding:'8px 12px 12px' }}>
+            {allWeeks.map(wk => (
+              <div key={wk} ref={wk === currentWeek ? currentWeekRef : null}>
+                <WeekCard weekKey={wk} isCurrent={wk === currentWeek}
+                  onAdd={() => setPickerWeek(wk)}
+                  onDup={() => setDupWeek(wk)}
+                  onViewRecipe={setViewRecipe}
+                />
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
 
       {pickerWeek && (
         <RecipePicker
@@ -1089,10 +1138,11 @@ function PlanningTab() {
           }}
           onCancel={() => setFilterData(null)}
           onConfirm={(selectedByRecipe) => {
-            // Ajoute tous les repas au planning
-            filterData.selections.forEach(({ recipe, persons: p }) =>
-              addMeal(filterData.weekKey, recipe.id, p)
-            );
+            // Ajoute tous les repas et capture leurs IDs pour fromMealId
+            const mealIds = {};
+            filterData.selections.forEach(({ recipe, persons: p }) => {
+              mealIds[recipe.id] = addMeal(filterData.weekKey, recipe.id, p);
+            });
             // Collecte les ingrédients sans correspondance de mot-clé
             const uncatItems = [];
             filterData.selections.forEach(({ recipe, persons: p }) => {
@@ -1107,14 +1157,14 @@ function PlanningTab() {
                 addAll: (catOverrides) => {
                   filterData.selections.forEach(({ recipe, persons: p }) => {
                     const ids = selectedByRecipe[recipe.id] || [];
-                    if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides);
+                    if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides, mealIds[recipe.id]);
                   });
                 },
               });
             } else {
               filterData.selections.forEach(({ recipe, persons: p }) => {
                 const ids = selectedByRecipe[recipe.id] || [];
-                if (ids.length) addIngredientsFromRecipe(recipe, p, ids);
+                if (ids.length) addIngredientsFromRecipe(recipe, p, ids, {}, mealIds[recipe.id]);
               });
             }
             const totalAdded = filterData.selections.reduce((s, { recipe }) => s + (selectedByRecipe[recipe.id]?.length || 0), 0);
@@ -1371,15 +1421,25 @@ function RecipePicker({ onClose, onSelect }) {
 
   const currentWeek = getISOWeekKey();
 
-  /** Semaines depuis la dernière utilisation (52 = jamais utilisée) */
-  const recipeScore = useCallback(r => {
-    const rm = meals.filter(m => m.recipeId === r.id);
-    if (!rm.length) return 52;
-    const latest = rm.reduce((max, m) => m.weekKey > max ? m.weekKey : max, '');
+  // Pré-calcul O(meals) au lieu de O(recipes × meals)
+  const scores = useMemo(() => {
     const [cy, cw] = currentWeek.split('-W').map(Number);
-    const [ly, lw] = latest.split('-W').map(Number);
-    return Math.min((cy - ly) * 52 + (cw - lw), 52);
-  }, [meals, currentWeek]);
+    const latestByRecipe = {};
+    meals.forEach(m => {
+      if (!latestByRecipe[m.recipeId] || m.weekKey > latestByRecipe[m.recipeId])
+        latestByRecipe[m.recipeId] = m.weekKey;
+    });
+    const map = {};
+    recipes.forEach(r => {
+      const latest = latestByRecipe[r.id];
+      if (!latest) { map[r.id] = 52; return; }
+      const [ly, lw] = latest.split('-W').map(Number);
+      map[r.id] = Math.min((cy - ly) * 52 + (cw - lw), 52);
+    });
+    return map;
+  }, [recipes, meals, currentWeek]);
+
+  const recipeScore = r => scores[r.id] ?? 52;
 
   /** Libellé "dernière utilisation" affiché sous le nom */
   const lastUsedLabel = r => {
@@ -1826,9 +1886,9 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
   for (let i = 0; i < 8; i++) weeks.push(shiftWeek(currentWeek, i));
 
   const doAdd = (ingredientIds = null, catOverrides = {}) => {
-    addMeal(selWeek, recipe.id, persons);
+    const mealId = addMeal(selWeek, recipe.id, persons);
     if (ingredientIds?.length) {
-      addIngredientsFromRecipe(recipe, persons, ingredientIds, catOverrides);
+      addIngredientsFromRecipe(recipe, persons, ingredientIds, catOverrides, mealId);
     } else {
       showSnack('ℹ️ Recette ajoutée · ingrédients non ajoutés à la liste');
     }
@@ -1911,15 +1971,7 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
 
 function RecipeCard({ recipe, onClick, onDelete }) {
   const { meals } = useApp();
-  const [confirmDel, setConfirmDel] = useState(false);
-
   const mealCount = meals.filter(m => m.recipeId === recipe.id).length;
-
-  const handleDelete = e => {
-    e.stopPropagation();
-    if (confirmDel) { onDelete(); }
-    else { setConfirmDel(true); setTimeout(() => setConfirmDel(false), 2500); }
-  };
 
   return (
     <div onClick={onClick} style={{
@@ -1957,14 +2009,11 @@ function RecipeCard({ recipe, onClick, onDelete }) {
             ? <span style={{ fontSize:12, lineHeight:1 }}>⭐</span>
             : <span style={{ width:12 }} />
           }
-          <button onClick={handleDelete} style={{
-            background: confirmDel ? C.redBg : 'transparent',
-            border: confirmDel ? `1px solid ${C.red}44` : 'none',
-            color: confirmDel ? C.red : C.muted,
-            borderRadius:5, padding:'1px 4px', cursor:'pointer', fontSize:11, transition:'all 0.2s',
-          }}>
-            {confirmDel ? '✓' : '🗑'}
-          </button>
+          <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{
+            background:'transparent', border:'none',
+            color:C.muted, borderRadius:5, padding:'1px 4px',
+            cursor:'pointer', fontSize:11,
+          }}>🗑</button>
         </div>
       </div>
     </div>
@@ -1972,7 +2021,7 @@ function RecipeCard({ recipe, onClick, onDelete }) {
 }
 
 function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
-  const { meals, showSnack } = useApp();
+  const { meals, showSnack, updateRecipe } = useApp();
   const [checked,     setChecked]     = useState(new Set());
   const [confirmDel,  setConfirmDel]  = useState(false);
   const [viewPortions, setViewPortions] = useState(recipe.portions || 4);
@@ -2020,7 +2069,7 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
         <div style={{ display:'flex', gap:6 }}>
           <Btn onClick={() => setAssignOpen(true)} variant="green" small>📅 Affecter</Btn>
           <Btn onClick={share} variant="accent" small>📤</Btn>
-          <Btn onClick={onEdit} small>✏️</Btn>
+          {onEdit && <Btn onClick={onEdit} small>✏️</Btn>}
         </div>
       </div>
 
@@ -2036,7 +2085,14 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
         <div style={{ display:'flex', flexWrap:'wrap', gap:7, marginBottom:14, justifyContent:'center' }}>
           {recipe.cookTimeMinutes > 0 && <Chip>⏱ {recipe.cookTimeMinutes} min</Chip>}
           {timesCookedCount > 0 && <Chip color={C.green}>✅ Cuisiné {timesCookedCount}×</Chip>}
-          {recipe.favorite && <Chip color={C.orange}>⭐ Favori</Chip>}
+          {/* Favori — tap direct sans passer par l'éditeur */}
+          <button onClick={() => updateRecipe({ ...recipe, favorite: !recipe.favorite })} style={{
+            background: recipe.favorite ? C.orangeBg : C.border,
+            color: recipe.favorite ? C.orange : C.muted,
+            border: recipe.favorite ? `1px solid ${C.orange}44` : '1px solid transparent',
+            fontSize:12, padding:'4px 12px', borderRadius:20, fontWeight:500,
+            cursor:'pointer', transition:'all 0.15s',
+          }}>{recipe.favorite ? '⭐ Favori' : '☆ Favori'}</button>
           <WeeksBadge recipeId={recipe.id} />
         </div>
 
@@ -2126,10 +2182,12 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
         )}
 
         <div style={{ marginTop:20, paddingTop:14, borderTop:`1px solid ${C.border}` }}>
-          <Btn onClick={() => { if(confirmDel) onDelete(); else { setConfirmDel(true); setTimeout(()=>setConfirmDel(false),3000); } }}
-            variant="danger" small>
-            {confirmDel ? '⚠️ Confirmer' : '🗑 Supprimer la recette'}
-          </Btn>
+          {onDelete && (
+            <Btn onClick={() => { if(confirmDel) onDelete(); else { setConfirmDel(true); setTimeout(()=>setConfirmDel(false),3000); } }}
+              variant="danger" small>
+              {confirmDel ? '⚠️ Confirmer' : '🗑 Supprimer la recette'}
+            </Btn>
+          )}
         </div>
       </div>
 
@@ -4181,6 +4239,28 @@ function SettingsTab() {
   return (
     <div style={{ padding:16 }}>
 
+      {/* ── Planning ── */}
+      <SecTitle>Vue du planning</SecTitle>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:16 }}>
+        {[
+          { v:0,  l:'📅 Vue annuelle' },
+          { v:4,  l:'4 sem.' },
+          { v:8,  l:'8 sem.' },
+          { v:13, l:'13 sem.' },
+        ].map(({ v, l }) => {
+          const active = (settings.weeksToShow || 0) === v;
+          return (
+            <button key={v} onClick={() => updSettings({ weeksToShow: v })} style={{
+              background: active ? C.accentBg : C.border,
+              color:      active ? C.accent   : C.muted,
+              border:     active ? `1px solid ${C.accent}44` : '1px solid transparent',
+              borderRadius:20, padding:'6px 14px', fontSize:12,
+              cursor:'pointer', fontWeight: active ? 700 : 400,
+            }}>{active && '✓ '}{l}</button>
+          );
+        })}
+      </div>
+
       {/* ── Catégories ── */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
         <SecTitle style={{ margin:0 }}>Catégories de courses</SecTitle>
@@ -4282,6 +4362,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.7.0</span> — fromMealId (rescaling précis) · deleteRecipe undo · RecipeCard direct delete · RecipeDetail favori inline · null guards onEdit/onDelete · MIN_YEAR dynamique · weeksToShow · recipeScore O(N)<br/>
             <span style={{ color:C.accent }}>2.6.6</span> — Alerte re-planification semaine consécutive<br/>
             <span style={{ color:C.accent }}>2.6.5</span> — Suggestions recettes (tri ancienneté + filtres tags) · 🎲 tirage pondéré<br/>
             <span style={{ color:C.accent }}>2.6.4</span> — Mode courses (overlay) · Note par repas · Tap = suppression en mode courses<br/>
