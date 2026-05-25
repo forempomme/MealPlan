@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.6.0"; // v25
+const VERSION = "2.6.6"; // v31
 
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
@@ -296,7 +296,7 @@ function AppProvider({ children }) {
   const addMeal = (weekKey, recipeId, persons) => {
     // N'ajoute QUE le repas au planning — les ingrédients sont ajoutés
     // séparément via addIngredientsFromRecipe après sélection utilisateur.
-    setMeals(p => [...p, { id: genId(), weekKey, recipeId, persons, done: false, addedAt: ts() }]);
+    setMeals(p => [...p, { id: genId(), weekKey, recipeId, persons, done: false, note: '', addedAt: ts() }]);
   };
 
   const addIngredientsFromRecipe = (recipe, persons, selectedIngIds, catOverrides = {}) => {
@@ -349,28 +349,39 @@ function AppProvider({ children }) {
     const newPersons = Math.max(1, oldPersons + delta);
     if (newPersons === oldPersons) return;
     setMeals(p => p.map(m => m.id === id ? { ...m, persons: newPersons } : m));
-    // Rescale les articles de courses liés à cette recette
     const ratio = newPersons / oldPersons;
+    const affected = shopping.filter(s => s.fromRecipeId === meal.recipeId && s.qty > 0);
     setShopping(p => p.map(s =>
       s.fromRecipeId === meal.recipeId && s.qty
         ? { ...s, qty: Math.round(s.qty * ratio * 10) / 10 }
         : s
     ));
+    if (affected.length > 0)
+      showSnack(`👥 ${oldPersons}→${newPersons} pers. · ${affected.length} quantité${affected.length>1?'s':''} de courses recalculée${affected.length>1?'s':''}`);
   };
 
   const toggleMealDone = id =>
     setMeals(p => p.map(m => m.id === id ? { ...m, done: !m.done } : m));
 
+  const updateMeal = (id, changes) =>
+    setMeals(p => p.map(m => m.id === id ? { ...m, ...changes } : m));
+
   const deleteMeal = id => {
     const meal     = meals.find(m => m.id === id);
     if (!meal) return;
-    const hasOther = meals.some(m => m.id !== id && m.weekKey === meal.weekKey && m.recipeId === meal.recipeId);
-    const nItems   = hasOther ? 0 : shopping.filter(s => s.fromRecipeId === meal.recipeId).length;
+    const hasOther       = meals.some(m => m.id !== id && m.weekKey === meal.weekKey && m.recipeId === meal.recipeId);
+    const removedShopping = hasOther ? [] : shopping.filter(s => s.fromRecipeId === meal.recipeId);
     if (!hasOther) setShopping(p => p.filter(s => s.fromRecipeId !== meal.recipeId));
     setMeals(p => p.filter(m => m.id !== id));
-    const name = recipes.find(r => r.id === meal.recipeId)?.name || 'Repas';
-    const suffix = nItems > 0 ? ` · ${nItems} article${nItems>1?'s':''} de courses retirés` : '';
-    showSnack(`"${name}" retiré du planning${suffix}`);
+    const name   = recipes.find(r => r.id === meal.recipeId)?.name || 'Repas';
+    const suffix = removedShopping.length > 0 ? ` · ${removedShopping.length} course${removedShopping.length>1?'s':''} retirée${removedShopping.length>1?'s':''}` : '';
+    showSnack(
+      `"${name}" retiré du planning${suffix}`,
+      () => {
+        setMeals(p => [...p, meal]);
+        if (removedShopping.length) setShopping(p => [...p, ...removedShopping]);
+      }
+    );
   };
 
   const duplicateWeek = (from, to) => {
@@ -466,7 +477,7 @@ function AppProvider({ children }) {
     <AppCtx.Provider value={{
       recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
       addRecipe, updateRecipe, deleteRecipe,
-      addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, deleteMeal, duplicateWeek,
+      addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek,
       addShoppingItem, deleteShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
       reorderItemsInCat, addCat, deleteCat, updateCat, reorderCats, updSettings, importAllData,
     }}>
@@ -1145,7 +1156,9 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
     const text = `📅 Semaine ${wn} — ${getWeekRange(weekKey)}\n\n` +
       weekMeals.map(m => {
         const r = recipes.find(x => x.id === m.recipeId);
-        return r ? `${r.emoji} ${r.name} (${m.persons} pers.)` : '';
+        if (!r) return '';
+        const note = m.note ? `\n   📝 ${m.note}` : '';
+        return `${r.emoji} ${r.name} (${m.persons} pers.)${note}`;
       }).filter(Boolean).join('\n');
     if (navigator.share) navigator.share({ title: 'Menu semaine', text });
     else navigator.clipboard?.writeText(text).catch(() => {});
@@ -1210,15 +1223,19 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
 }
 
 function MealItem({ meal, recipe, onViewRecipe }) {
-  const { toggleMealDone, updateMealPersons, deleteMeal } = useApp();
-  const [confirm, setConfirm] = useState(false);
+  const { toggleMealDone, updateMealPersons, updateMeal, deleteMeal, meals } = useApp();
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [draftNote, setDraftNote] = useState('');
 
-  const handleDelete = () => {
-    if (confirm) { deleteMeal(meal.id); }
-    else { setConfirm(true); setTimeout(() => setConfirm(false), 3000); }
-  };
+  const openNote = () => { setDraftNote(meal.note || ''); setNoteOpen(true); };
+  const saveNote = () => { updateMeal(meal.id, { note: draftNote.trim() }); setNoteOpen(false); };
+
+  // Indicateur de re-planification : même recette la semaine précédente
+  const prevWeek   = shiftWeek(meal.weekKey, -1);
+  const wasLastWeek = meals.some(m => m.id !== meal.id && m.recipeId === meal.recipeId && m.weekKey === prevWeek);
 
   return (
+    <>
     <div style={{
       display:'flex', alignItems:'center', gap:6,
       background: meal.done ? C.cookedBg : C.planBg,
@@ -1244,6 +1261,23 @@ function MealItem({ meal, recipe, onViewRecipe }) {
           textDecoration: meal.done ? 'line-through' : 'none',
           overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
         }}>{recipe.name}</div>
+        {(wasLastWeek || meal.note) && (
+          <div style={{ display:'flex', gap:6, marginTop:2, alignItems:'center' }}>
+            {wasLastWeek && (
+              <span style={{
+                fontSize:10, color:C.orange, background:C.orangeBg,
+                border:`1px solid ${C.orange}33`, borderRadius:5,
+                padding:'1px 5px', fontWeight:600, flexShrink:0,
+              }}>↩ S.{prevWeek.split('-W')[1]}</span>
+            )}
+            {meal.note && (
+              <span style={{
+                fontSize:11, color:C.orange, fontStyle:'italic',
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+              }}>📝 {meal.note}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Personnes */}
@@ -1259,78 +1293,246 @@ function MealItem({ meal, recipe, onViewRecipe }) {
         }}>+</button>
       </div>
 
+      {/* Note */}
+      <button onClick={openNote} style={{
+        background: meal.note ? C.orangeBg : 'transparent',
+        border: meal.note ? `1px solid ${C.orange}44` : '1px solid transparent',
+        color: meal.note ? C.orange : C.muted,
+        borderRadius:7, padding:'3px 7px', cursor:'pointer', fontSize:13,
+        flexShrink:0, transition:'all 0.15s',
+      }}>📝</button>
+
       {/* Supprimer */}
-      <button onClick={handleDelete} style={{
-        background: confirm ? C.redBg : 'transparent',
-        border: confirm ? `1px solid ${C.red}33` : 'none',
-        color: confirm ? C.red : C.muted,
-        borderRadius:6, padding:'2px 6px', cursor:'pointer', fontSize:12, flexShrink:0, transition:'all 0.2s',
-      }}>
-        {confirm ? '✓' : '🗑'}
-      </button>
+      <button onClick={() => deleteMeal(meal.id)} style={{
+        background:'transparent', border:'none',
+        color:C.muted, borderRadius:6, padding:'2px 6px',
+        cursor:'pointer', fontSize:12, flexShrink:0,
+      }}>🗑</button>
     </div>
+
+    {/* Bottom sheet note */}
+    {noteOpen && (
+      <div onClick={e => e.target===e.currentTarget && setNoteOpen(false)} style={{
+        position:'fixed', inset:0, zIndex:1100, background:'rgba(0,0,0,0.65)',
+        display:'flex', alignItems:'flex-end',
+      }}>
+        <div style={{
+          width:'100%', maxWidth:480, margin:'0 auto',
+          background:C.card, borderRadius:'20px 20px 0 0',
+          padding:'20px 16px 28px', border:`1px solid ${C.border}`,
+        }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+            <span style={{ fontWeight:700, color:C.text, fontSize:14 }}>
+              📝 Note — {recipe.name}
+            </span>
+            <button onClick={() => setNoteOpen(false)} style={{ background:'transparent', border:'none', color:C.muted, cursor:'pointer', fontSize:18, lineHeight:1 }}>✕</button>
+          </div>
+          <textarea
+            value={draftNote}
+            onChange={e => setDraftNote(e.target.value)}
+            placeholder="Ex : sans gluten, doubler la sauce, acheté tout fait…"
+            autoFocus
+            rows={3}
+            style={{
+              width:'100%', background:'#111419', border:`1px solid ${C.border}`,
+              borderRadius:10, padding:'10px 12px', color:C.text, fontSize:13,
+              outline:'none', resize:'none', fontFamily:'inherit',
+              lineHeight:1.5, boxSizing:'border-box',
+            }}
+          />
+          <div style={{ display:'flex', gap:8, marginTop:10 }}>
+            {draftNote.trim() && (
+              <button onClick={() => { setDraftNote(''); saveNote(); }} style={{
+                flex:1, padding:'10px', background:C.redBg,
+                border:`1px solid ${C.red}33`, color:C.red,
+                borderRadius:10, cursor:'pointer', fontSize:12, fontWeight:600,
+              }}>🗑 Supprimer</button>
+            )}
+            <button onClick={saveNote} style={{
+              flex:2, padding:'10px', background:C.accentDk,
+              border:'none', color:'#fff',
+              borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:700,
+            }}>✓ Enregistrer</button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
 function RecipePicker({ onClose, onSelect }) {
-  const { recipes } = useApp();
-  const [search,   setSearch]   = useState('');
-  const [persons,  setPersons]  = useState(6);
-  const [selected, setSelected] = useState(new Set()); // multi-sélection
+  const { recipes, meals } = useApp();
+  const [search,      setSearch]      = useState('');
+  const [persons,     setPersons]     = useState(6);
+  const [selected,    setSelected]    = useState(new Set());
+  const [suggestMode, setSuggestMode] = useState(false);
+  const [tagFilter,   setTagFilter]   = useState(null);
 
-  const toggle = id => setSelected(s => {
-    const ns = new Set(s); ns.has(id) ? ns.delete(id) : ns.add(id); return ns;
-  });
+  const currentWeek = getISOWeekKey();
 
-  const filtered = recipes.filter(r => r.name.toLowerCase().includes(search.toLowerCase()));
-  const count = selected.size;
+  /** Semaines depuis la dernière utilisation (52 = jamais utilisée) */
+  const recipeScore = useCallback(r => {
+    const rm = meals.filter(m => m.recipeId === r.id);
+    if (!rm.length) return 52;
+    const latest = rm.reduce((max, m) => m.weekKey > max ? m.weekKey : max, '');
+    const [cy, cw] = currentWeek.split('-W').map(Number);
+    const [ly, lw] = latest.split('-W').map(Number);
+    return Math.min((cy - ly) * 52 + (cw - lw), 52);
+  }, [meals, currentWeek]);
+
+  /** Libellé "dernière utilisation" affiché sous le nom */
+  const lastUsedLabel = r => {
+    const score = recipeScore(r);
+    if (score === 52) return null; // jamais → pas de label
+    if (score === 0)  return { text: 'Cette semaine',   color: C.orange };
+    if (score === 1)  return { text: 'Semaine passée',  color: C.orange };
+    if (score < 4)    return { text: `Il y a ${score} sem.`, color: C.muted };
+    return               { text: `Il y a ${score} sem.`, color: C.green };
+  };
+
+  // Tags disponibles
+  const allTags = useMemo(() => {
+    const s = new Set(); recipes.forEach(r => (r.tags||[]).forEach(t => s.add(t))); return [...s];
+  }, [recipes]);
+
+  // Filtrage + tri
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    let list = recipes.filter(r => {
+      if (tagFilter && !(r.tags||[]).includes(tagFilter)) return false;
+      if (q && !r.name.toLowerCase().includes(q) &&
+          !(r.ingredients||[]).some(i => i.name.toLowerCase().includes(q))) return false;
+      return true;
+    });
+    if (suggestMode) list = [...list].sort((a,b) => recipeScore(b) - recipeScore(a));
+    return list;
+  }, [recipes, search, tagFilter, suggestMode, recipeScore]);
+
+  const toggle = id => setSelected(s => { const ns=new Set(s); ns.has(id)?ns.delete(id):ns.add(id); return ns; });
+  const count  = selected.size;
+
+  /** Tirage aléatoire pondéré : score plus élevé = plus de chances */
+  const pickRandom = () => {
+    const pool = filtered.filter(r => !selected.has(r.id));
+    if (!pool.length) return;
+    const weights = pool.map(r => Math.max(recipeScore(r), 1));
+    const total   = weights.reduce((a,b) => a+b, 0);
+    let rand = Math.random() * total;
+    for (let i = 0; i < pool.length; i++) {
+      rand -= weights[i];
+      if (rand <= 0) { toggle(pool[i].id); return; }
+    }
+    toggle(pool[pool.length - 1].id);
+  };
 
   return (
     <BottomSheet title="Ajouter des repas" onClose={onClose}>
       <div style={{ padding:'10px 14px' }}>
-        {/* Personnes */}
+
+        {/* ── Ligne 1 : personnes + mode ── */}
         <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
-          <span style={{ color:C.muted, fontSize:13, flex:1 }}>👥 Personnes pour tous</span>
+          <span style={{ color:C.muted, fontSize:13 }}>👥</span>
           <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>−</button>
           <span style={{ fontWeight:700, color:C.text, minWidth:22, textAlign:'center', fontSize:14 }}>{persons}</span>
           <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>+</button>
+          <div style={{ flex:1 }} />
+          {/* Toggle mode */}
+          <div style={{ display:'flex', background:C.border, borderRadius:9, padding:2, gap:2 }}>
+            {[['browse','🗃 Toutes'],['suggest','💡 Suggestions']].map(([m, label]) => (
+              <button key={m} onClick={() => setSuggestMode(m==='suggest')} style={{
+                background: (suggestMode ? 'suggest' : 'browse')===m ? C.accentDk : 'transparent',
+                color:      (suggestMode ? 'suggest' : 'browse')===m ? '#fff' : C.muted,
+                border:'none', borderRadius:7, padding:'5px 10px',
+                fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap',
+              }}>{label}</button>
+            ))}
+          </div>
         </div>
 
-        <input placeholder="🔍 Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}
-          style={{ marginBottom:8, padding:'7px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, width:'100%', fontSize:13, outline:'none' }}
-        />
+        {/* ── Ligne 2 : recherche + 🎲 ── */}
+        <div style={{ display:'flex', gap:6, marginBottom:suggestMode && allTags.length ? 8 : 0 }}>
+          <input placeholder="🔍 Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}
+            style={{ flex:1, padding:'7px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none' }}
+          />
+          <button
+            onClick={pickRandom}
+            title="Recette aléatoire (favorise les moins récentes)"
+            style={{
+              background: C.orangeBg, border:`1px solid ${C.orange}44`,
+              color:C.orange, borderRadius:9, padding:'7px 12px',
+              fontSize:18, cursor:'pointer', flexShrink:0, fontWeight:700,
+              transition:'transform 0.15s',
+            }}
+          >🎲</button>
+        </div>
 
-        {/* Recettes avec cases à cocher */}
-        <div style={{ maxHeight:360, overflowY:'auto' }}>
-          {filtered.map(r => {
-            const checked = selected.has(r.id);
+        {/* ── Filtres par tag (mode suggestions) ── */}
+        {suggestMode && allTags.length > 0 && (
+          <div style={{ display:'flex', gap:5, overflowX:'auto', paddingBottom:6, marginBottom:4,
+            scrollbarWidth:'none', WebkitOverflowScrolling:'touch' }}>
+            <button onClick={() => setTagFilter(null)} style={{
+              flexShrink:0, background: !tagFilter ? C.accentBg : C.border,
+              color: !tagFilter ? C.accent : C.muted,
+              border: !tagFilter ? `1px solid ${C.accent}44` : '1px solid transparent',
+              borderRadius:20, padding:'4px 12px', fontSize:11, cursor:'pointer', fontWeight: !tagFilter?700:400,
+            }}>Toutes</button>
+            {allTags.map(t => (
+              <button key={t} onClick={() => setTagFilter(tagFilter===t ? null : t)} style={{
+                flexShrink:0, background: tagFilter===t ? C.accentBg : C.border,
+                color: tagFilter===t ? C.accent : C.muted,
+                border: tagFilter===t ? `1px solid ${C.accent}44` : '1px solid transparent',
+                borderRadius:20, padding:'4px 12px', fontSize:11, cursor:'pointer', fontWeight: tagFilter===t?700:400,
+              }}>{t}</button>
+            ))}
+          </div>
+        )}
+
+        {/* ── Liste de recettes ── */}
+        <div style={{ maxHeight:340, overflowY:'auto', marginTop:suggestMode && allTags.length ? 0 : 8 }}>
+          {filtered.map((r, idx) => {
+            const isSelected = selected.has(r.id);
+            const lul        = lastUsedLabel(r);
+            const score      = recipeScore(r);
+            const isNew      = score === 52; // jamais planifiée
             return (
               <div key={r.id} onClick={() => toggle(r.id)} style={{
                 display:'flex', alignItems:'center', gap:10, padding:'8px 10px',
                 borderRadius:9, marginBottom:4, cursor:'pointer', transition:'all 0.12s',
-                background: checked ? C.accentBg : C.bg,
-                border:`1px solid ${checked ? C.accent+'44' : C.border}`,
+                background: isSelected ? C.accentBg : C.bg,
+                border:`1px solid ${isSelected ? C.accent+'44' : C.border}`,
               }}>
-                {/* Checkbox */}
                 <div style={{
                   width:18, height:18, borderRadius:5, flexShrink:0,
-                  background: checked ? C.accentDk : 'transparent',
-                  border:`2px solid ${checked ? C.accentDk : C.border}`,
-                  display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.12s',
+                  background: isSelected ? C.accentDk : 'transparent',
+                  border:`2px solid ${isSelected ? C.accentDk : C.border}`,
+                  display:'flex', alignItems:'center', justifyContent:'center',
                 }}>
-                  {checked && <span style={{ color:'#fff', fontSize:10, fontWeight:700 }}>✓</span>}
+                  {isSelected && <span style={{ color:'#fff', fontSize:10, fontWeight:700 }}>✓</span>}
                 </div>
                 <span style={{ fontSize:22, flexShrink:0 }}>{r.emoji}</span>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontWeight:500, fontSize:15, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</div>
-                  <div style={{ fontSize:11, color:C.muted }}>
-                    {r.portions}p{r.cookTimeMinutes ? ` · ⏱ ${r.cookTimeMinutes}min` : ''}{r.favorite ? ' · ⭐' : ''}
+                  <div style={{ display:'flex', alignItems:'baseline', gap:6 }}>
+                    <span style={{ fontWeight:500, fontSize:15, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{r.name}</span>
+                    {isNew && suggestMode && (
+                      <span style={{ fontSize:9, fontWeight:700, color:C.green, background:C.greenBg, border:`1px solid ${C.green}44`, borderRadius:6, padding:'1px 5px', flexShrink:0 }}>NOUVEAU</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize:11, color:C.muted, display:'flex', gap:8, marginTop:1 }}>
+                    <span>{r.portions}p{r.cookTimeMinutes ? ` · ⏱ ${r.cookTimeMinutes}min` : ''}{r.favorite ? ' · ⭐' : ''}</span>
+                    {lul && suggestMode && (
+                      <span style={{ color: lul.color }}>• {lul.text}</span>
+                    )}
                   </div>
                 </div>
               </div>
             );
           })}
-          {filtered.length === 0 && <div style={{ textAlign:'center', padding:20, color:C.muted, fontSize:13 }}>Aucune recette</div>}
+          {filtered.length === 0 && (
+            <div style={{ textAlign:'center', padding:20, color:C.muted, fontSize:13 }}>
+              {suggestMode ? '🎉 Toutes les recettes ont été faites récemment !' : 'Aucune recette'}
+            </div>
+          )}
         </div>
 
         <Btn
@@ -1379,10 +1581,11 @@ function DupWeekModal({ fromKey, onClose, onDup }) {
 //  RECETTES TAB
 // ══════════════════════════════════════════════════════
 function RecipesTab() {
-  const { recipes, addRecipe, updateRecipe, deleteRecipe } = useApp();
+  const { recipes, meals, addRecipe, updateRecipe, deleteRecipe } = useApp();
   const [search,      setSearch]      = useState('');
   const [filterFav,   setFilterFav]   = useState(false);
   const [filterTags,  setFilterTags]  = useState([]);
+  const [sort,        setSort]        = useState('newest');
   const [filterOpen,  setFilterOpen]  = useState(false);
   const [detailId,    setDetailId]    = useState(null);
   const [editRec,     setEditRec]     = useState(null);
@@ -1391,13 +1594,39 @@ function RecipesTab() {
     const s = new Set(); recipes.forEach(r => (r.tags||[]).forEach(t => s.add(t))); return [...s];
   }, [recipes]);
 
-  const activeFilters = (filterFav ? 1 : 0) + filterTags.length;
+  // Nombre de fois que chaque recette a été planifiée
+  const recipeCount = useMemo(() => {
+    const counts = {};
+    meals.forEach(m => { counts[m.recipeId] = (counts[m.recipeId] || 0) + 1; });
+    return counts;
+  }, [meals]);
 
-  const filtered = recipes.filter(r =>
-    (!filterFav || r.favorite) &&
-    (!filterTags.length || (r.tags||[]).some(t => filterTags.includes(t))) &&
-    (!search    || r.name.toLowerCase().includes(search.toLowerCase()))
-  );
+  const activeFilters = (filterFav ? 1 : 0) + filterTags.length + (sort !== 'newest' ? 1 : 0);
+
+  // Filtrage : nom OU ingrédient
+  const filtered = useMemo(() => recipes.filter(r => {
+    if (filterFav && !r.favorite) return false;
+    if (filterTags.length && !(r.tags||[]).some(t => filterTags.includes(t))) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      const inName = r.name.toLowerCase().includes(q);
+      const inIng  = (r.ingredients||[]).some(i => i.name.toLowerCase().includes(q));
+      if (!inName && !inIng) return false;
+    }
+    return true;
+  }), [recipes, filterFav, filterTags, search]);
+
+  // Tri
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    switch (sort) {
+      case 'name':      return arr.sort((a,b) => a.name.localeCompare(b.name, 'fr'));
+      case 'most_used': return arr.sort((a,b) => (recipeCount[b.id]||0) - (recipeCount[a.id]||0));
+      case 'rating':    return arr.sort((a,b) => (b.rating||0) - (a.rating||0));
+      case 'time':      return arr.sort((a,b) => (a.cookTimeMinutes||999) - (b.cookTimeMinutes||999));
+      default:          return arr.sort((a,b) => (b.createdAt||0) - (a.createdAt||0)); // newest
+    }
+  }, [filtered, sort, recipeCount]);
 
   const detailRecipe = recipes.find(r => r.id === detailId);
 
@@ -1440,14 +1669,14 @@ function RecipesTab() {
 
       {/* Grille compacte */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-        {filtered.map(r => (
+        {sorted.map(r => (
           <RecipeCard key={r.id} recipe={r}
             onClick={() => setDetailId(r.id)}
             onDelete={() => deleteRecipe(r.id)}
           />
         ))}
       </div>
-      {filtered.length === 0 && <EmptyState icon="📖" text="Aucune recette trouvée" />}
+      {sorted.length === 0 && <EmptyState icon="📖" text="Aucune recette trouvée" />}
 
       {filterOpen && (
         <FilterModal
@@ -1455,6 +1684,7 @@ function RecipesTab() {
           filterFav={filterFav} setFilterFav={setFilterFav}
           filterTags={filterTags} setFilterTags={setFilterTags}
           allTags={allTags}
+          sort={sort} setSort={setSort}
         />
       )}
 
@@ -1479,9 +1709,9 @@ function RecipesTab() {
   );
 }
 
-function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTags, allTags }) {
+function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTags, allTags, sort, setSort }) {
   const [tagSearch, setTagSearch] = useState('');
-  const activeCount = (filterFav ? 1 : 0) + filterTags.length;
+  const activeCount = (filterFav ? 1 : 0) + filterTags.length + (sort !== 'newest' ? 1 : 0);
 
   const toggleTag = (t) =>
     setFilterTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
@@ -1492,9 +1722,38 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
 
   const inp = { padding:'8px 11px', background:'#111419', border:`1px solid #2A3040`, borderRadius:9, color:'#E8EAF2', fontSize:13, outline:'none', width:'100%' };
 
+  const SORT_OPTIONS = [
+    { v:'newest',    label:'📅 Plus récente' },
+    { v:'name',      label:'🔤 A → Z' },
+    { v:'most_used', label:'🔥 Plus cuisinée' },
+    { v:'rating',    label:'⭐ Mieux notée' },
+    { v:'time',      label:'⏱ Temps ↑' },
+  ];
+
   return (
-    <BottomSheet title="Filtrer les recettes" onClose={onClose}>
+    <BottomSheet title="Filtrer & Trier" onClose={onClose}>
       <div style={{ padding:16 }}>
+
+        {/* ── Tri ── */}
+        <SecTitle>Tri</SecTitle>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:14 }}>
+          {SORT_OPTIONS.map(({ v, label }) => {
+            const active = sort === v;
+            return (
+              <button key={v} onClick={() => setSort(v)} style={{
+                background: active ? C.accentBg : C.border,
+                color:      active ? C.accent   : C.muted,
+                border:     active ? `1px solid ${C.accent}44` : '1px solid transparent',
+                padding:'6px 12px', borderRadius:20, fontSize:12,
+                cursor:'pointer', fontWeight: active ? 700 : 400,
+              }}>
+                {active && '✓ '}{label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ── Affichage ── */}
         <SecTitle>Affichage</SecTitle>
         <div onClick={() => setFilterFav(f=>!f)} style={{
           display:'flex', justifyContent:'space-between', alignItems:'center',
@@ -1544,10 +1803,10 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
         </>)}
 
         {activeCount > 0 && (
-          <button onClick={() => { setFilterFav(false); setFilterTags([]); }} style={{
+          <button onClick={() => { setFilterFav(false); setFilterTags([]); setSort('newest'); }} style={{
             width:'100%', padding:'10px', background:C.redBg, color:C.red,
             border:`1px solid ${C.red}33`, borderRadius:10, cursor:'pointer', fontSize:13, marginBottom:8,
-          }}>✕ Effacer les filtres</button>
+          }}>✕ Effacer les filtres et le tri</button>
         )}
         <Btn onClick={onClose} variant="primary" style={{ width:'100%', justifyContent:'center' }}>Appliquer</Btn>
       </div>
@@ -2247,12 +2506,6 @@ function parseMicrodata(doc) {
   };
 }
 
-/** Pipeline complet HTML → ParsedRecipe (JSON-LD → __NEXT_DATA__ → Microdata → texte HTML) */
-function parseHtml(html) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  return parseJsonLd(doc) || parseNextData(doc) || parseMicrodata(doc) || parseHtmlContent(doc) || null;
-}
-
 /**
  * Étape 5 — HTML brut : extrait ingrédients et étapes depuis les sections
  * "Ingrédients" / "Préparation" pour les blogs sans markup structuré (Overblog, Canalblog…).
@@ -2321,7 +2574,21 @@ function RecipeEditor({ recipe, onClose, onSave }) {
   const [importMode,  setImportMode]  = useState('url');   // 'url' | 'paste'
   const [pasteText,   setPasteText]   = useState('');
   const [importStep,  setImportStep]  = useState('');
+  const [elapsed,     setElapsed]     = useState(0);
   const [dupWarning,  setDupWarning]  = useState(null); // recette existante en doublon
+
+  // Compteur de secondes pendant l'import
+  useEffect(() => {
+    if (!importing) { setElapsed(0); return; }
+    const id = setInterval(() => setElapsed(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [importing]);
+
+  /** Race contre un timeout de 30 s */
+  const withTimeout = (promise, ms = 30000) => Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`Délai dépassé (${ms/1000}s) — essaie de coller le texte manuellement`)), ms)),
+  ]);
 
   // Détecte un doublon par URL exacte ou par nom identique (hors modification d'une recette existante)
   const checkDuplicate = (url, name) => {
@@ -2438,13 +2705,13 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
 
         // ── Jow : API dédiée ──────────────────────────
         if (url.includes('jow.fr')) {
-          try { raw = await fetchJow(url); }
+          try { raw = await withTimeout(fetchJow(url)); }
           catch (e) {
             setImportStep('↩ API Jow inaccessible, essai HTML…');
-            raw = await tryHtmlPipeline(url);
+            raw = await withTimeout(tryHtmlPipeline(url));
           }
         } else {
-          raw = await tryHtmlPipeline(url);
+          raw = await withTimeout(tryHtmlPipeline(url));
         }
       }
 
@@ -2630,11 +2897,24 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
               </Btn>
             </>)}
 
-            {/* Étape en cours */}
-            {importing && importStep && (
+            {/* Étape en cours + chrono */}
+            {importing && (
               <div style={{ marginTop:10, display:'flex', alignItems:'center', gap:8, color:C.accent, fontSize:12 }}>
                 <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>⚙️</span>
-                {importStep}
+                <span style={{ flex:1 }}>{importStep || 'Analyse en cours…'}</span>
+                <span style={{ color:C.muted, fontSize:11, flexShrink:0 }}>{elapsed}s / 30s</span>
+              </div>
+            )}
+            {/* Barre de progression du timeout */}
+            {importing && (
+              <div style={{ marginTop:6, height:3, background:C.border, borderRadius:2, overflow:'hidden' }}>
+                <div style={{
+                  height:'100%', borderRadius:2, background:C.accent,
+                  width:`${Math.min((elapsed/30)*100,100)}%`,
+                  transition:'width 1s linear',
+                  opacity: elapsed > 20 ? 1 : 0.6,
+                  backgroundColor: elapsed > 20 ? C.orange : C.accent,
+                }} />
               </div>
             )}
             {/* Succès */}
@@ -3002,10 +3282,11 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
 //  COURSES TAB
 // ══════════════════════════════════════════════════════
 function ShoppingTab() {
-  const { shopping, cats, addShoppingItem, deleteItemsByCategory, clearChecked, clearAll, showSnack, reorderCats, updateCat } = useApp();
+  const { shopping, cats, addShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll, showSnack, reorderCats, updateCat } = useApp();
   const [newName,  setNewName]  = useState('');
   const [newQty,   setNewQty]   = useState('');
   const [newUnit,  setNewUnit]  = useState('');
+  const [shopMode,     setShopMode]     = useState(false);
   const [menuOpen,     setMenuOpen]     = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [dragOverCat,  setDragOverCat]  = useState(null);
@@ -3146,6 +3427,14 @@ function ShoppingTab() {
           {checkedCount > 0 && <span style={{ color:C.green }}> · {checkedCount} coché{checkedCount>1?'s':''}</span>}
         </span>
         <div style={{ display:'flex', gap:5, position:'relative' }}>
+          {shopping.filter(s=>!s.checked).length > 0 && (
+            <button onClick={() => setShopMode(true)} style={{
+              background:`linear-gradient(135deg, ${C.accentDk}, ${C.accent})`,
+              border:'none', color:'#fff', borderRadius:9,
+              padding:'5px 11px', fontSize:12, fontWeight:700,
+              cursor:'pointer', display:'flex', alignItems:'center', gap:4,
+            }}>🛍 Faire les courses</button>
+          )}
           <Btn onClick={shareList} small variant="ghost">📤</Btn>
           <div style={{ position:'relative' }}>
             <Btn onClick={() => setMenuOpen(m=>!m)} small variant="ghost">⋯</Btn>
@@ -3257,6 +3546,126 @@ function ShoppingTab() {
           onCancel={() => setCatAssignItem(null)}
         />
       )}
+
+      {/* ══ MODE COURSES — overlay plein écran ══ */}
+      {shopMode && <ShoppingModeOverlay
+        shopping={shopping}
+        cats={sortedCats}
+        onCheck={id => updateShoppingItem(id, { checked: true })}
+        onExit={() => setShopMode(false)}
+      />}
+    </div>
+  );
+}
+
+function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
+  // Seulement les articles non cochés, groupés par catégorie
+  const unchecked = shopping.filter(s => !s.checked);
+  const total     = shopping.length;       // total initial (ne change pas pendant la session)
+  const done      = total - unchecked.length;
+  const allGone   = unchecked.length === 0;
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, zIndex:500,
+      background:C.bg, overflowY:'auto',
+      display:'flex', flexDirection:'column',
+      animation:'fadeIn 0.15s',
+    }}>
+      {/* ── Header ── */}
+      <div style={{
+        background: 'linear-gradient(135deg, #0D2040, #152E52)',
+        padding:'12px 16px 10px', flexShrink:0,
+        borderBottom:'1px solid #1E4070',
+        position:'sticky', top:0, zIndex:10,
+      }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:800, color:'#7EC8FF' }}>🛍 Mode courses</div>
+            <div style={{ fontSize:12, color:'#3A6080', marginTop:1 }}>
+              {allGone ? 'Tout est dans le chariot !' : `${unchecked.length} article${unchecked.length>1?'s':''} restant${unchecked.length>1?'s':''}`}
+            </div>
+          </div>
+          <button onClick={onExit} style={{
+            background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.12)',
+            color:'#7EC8FF', borderRadius:10, padding:'7px 14px',
+            fontSize:12, fontWeight:600, cursor:'pointer',
+          }}>✕ Quitter</button>
+        </div>
+
+        {/* Barre de progression */}
+        <div style={{ height:4, background:'rgba(255,255,255,0.08)', borderRadius:4, overflow:'hidden' }}>
+          <div style={{
+            height:'100%', borderRadius:4, transition:'width 0.3s',
+            width: total > 0 ? `${(done/total)*100}%` : '0%',
+            background: allGone
+              ? `linear-gradient(90deg, #3DA882, ${C.green})`
+              : `linear-gradient(90deg, ${C.accentDk}, #7EC8FF)`,
+          }} />
+        </div>
+      </div>
+
+      {/* ── Liste ── */}
+      <div style={{ flex:1, padding:'10px 12px 80px' }}>
+        {allGone ? (
+          <div style={{ textAlign:'center', padding:'60px 20px' }}>
+            <div style={{ fontSize:52, marginBottom:16 }}>✅</div>
+            <div style={{ fontSize:18, fontWeight:800, color:C.green, marginBottom:8 }}>Courses terminées !</div>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:24 }}>Tous les articles ont été récupérés.</div>
+            <button onClick={onExit} style={{
+              background:C.accentDk, border:'none', color:'#fff',
+              borderRadius:12, padding:'12px 28px', fontSize:14, fontWeight:700, cursor:'pointer',
+            }}>← Retour à la liste</button>
+          </div>
+        ) : (
+          cats.map(cat => {
+            const items = unchecked.filter(s => s.categoryId === cat.id);
+            if (!items.length) return null;
+            return (
+              <div key={cat.id} style={{ marginBottom:16 }}>
+                <div style={{
+                  fontSize:11, color:C.muted, fontWeight:700, letterSpacing:'0.07em',
+                  textTransform:'uppercase', marginBottom:7,
+                  display:'flex', alignItems:'center', gap:7,
+                }}>
+                  <span style={{ fontSize:16 }}>{cat.emoji}</span>{cat.name}
+                </div>
+                {items.map(item => (
+                  <div
+                    key={item.id}
+                    onClick={() => onCheck(item.id)}
+                    style={{
+                      display:'flex', alignItems:'center', gap:14,
+                      background:C.card, border:`1px solid ${C.border}`,
+                      borderRadius:14, padding:'14px 16px', marginBottom:7,
+                      cursor:'pointer', userSelect:'none', transition:'opacity 0.15s',
+                      WebkitTapHighlightColor:'transparent',
+                      active: { opacity: 0.7 },
+                    }}
+                  >
+                    {/* Cercle vide (invite au tap) */}
+                    <div style={{
+                      width:28, height:28, borderRadius:'50%', flexShrink:0,
+                      border:`2.5px solid ${C.border}`, background:'transparent',
+                    }} />
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:17, color:C.text, fontWeight:500, lineHeight:1.25 }}>{item.name}</div>
+                      {item.qty > 0 && (
+                        <div style={{ fontSize:13, color:C.muted, marginTop:2 }}>
+                          {item.qty}{item.unit ? '\u202f' + item.unit : ''}
+                        </div>
+                      )}
+                    </div>
+                    {item.fromRecipeId && (
+                      <span style={{ fontSize:12, color:C.accent, opacity:0.7, flexShrink:0 }}>📅</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -3480,6 +3889,7 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
 // ══════════════════════════════════════════════════════
 function StatsTab() {
   const { recipes, meals } = useApp();
+  const [assignFromStats, setAssignFromStats] = useState(null);
 
   // ── Calculs de base ──
   const favCount     = recipes.filter(r => r.favorite).length;
@@ -3511,19 +3921,16 @@ function StatsTab() {
   const topTags    = Object.entries(tagCount).sort(([,a],[,b]) => b-a).slice(0,8);
   const maxTagCnt  = topTags[0]?.[1] || 1;
 
-  // ── Heatmap 12 semaines ──
+  // ── Activité : 8 dernières semaines en bar chart ──
   const cw = getISOWeekKey();
-  const heatWeeks = Array.from({ length:12 }, (_, i) => {
-    const key   = shiftWeek(cw, i - 11);
+  const activityWeeks = Array.from({ length:8 }, (_, i) => {
+    const key   = shiftWeek(cw, i - 7);
     const count = meals.filter(m => m.weekKey === key).length;
-    return { key, wn: key.split('-W')[1], count };
+    const start = getWeekStart(key);
+    const label = start.toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
+    return { key, label, count };
   });
-  const maxHeat = Math.max(...heatWeeks.map(w => w.count), 1);
-  const heatColor = (count) => {
-    if (count === 0) return C.border;
-    const t = Math.min(count / maxHeat, 1);
-    return `rgba(123,168,232,${0.2 + t * 0.8})`;
-  };
+  const maxActivity = Math.max(...activityWeeks.map(w => w.count), 1);
 
   // ── Recettes jamais planifiées ──
   const usedIds      = new Set(meals.map(m => m.recipeId));
@@ -3544,32 +3951,36 @@ function StatsTab() {
         <KpiCard icon="📅" value={activeWeeks}    label="Semaines"    sub="avec repas"                       color={C.orange} />
       </div>
 
-      {/* ── Heatmap ── */}
+      {/* ── Activité 8 semaines — bar chart ── */}
       {meals.length > 0 && (
         <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:14, marginBottom:14 }}>
           <div style={{ fontSize:12, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>
-            🗓 Activité — 12 dernières semaines
+            🗓 Activité — 8 dernières semaines
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(12, 1fr)', gap:3 }}>
-            {heatWeeks.map(({ key, wn, count }) => (
-              <div key={key} title={`S${wn} — ${count} repas`} style={{
-                aspectRatio:'1', borderRadius:5,
-                background: heatColor(count),
-                border: key===cw ? `2px solid ${C.accent}` : '1px solid transparent',
-                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-              }}>
-                <span style={{ fontSize:7, color: count>0?C.text:C.muted, lineHeight:1.2 }}>S{wn}</span>
-                {count > 0 && <span style={{ fontSize:8, fontWeight:700, color:C.text }}>{count}</span>}
+          {activityWeeks.map(({ key, label, count }) => {
+            const isCurrent = key === cw;
+            return (
+              <div key={key} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:7 }}>
+                <span style={{
+                  fontSize:11, flexShrink:0, width:52, textAlign:'right',
+                  color: isCurrent ? C.accent : C.muted,
+                  fontWeight: isCurrent ? 700 : 400,
+                }}>{isCurrent ? '▶ ' + label : label}</span>
+                <div style={{ flex:1, height:16, background:C.border, borderRadius:4, overflow:'hidden' }}>
+                  <div style={{
+                    height:'100%', borderRadius:4, transition:'width 0.5s',
+                    width: count > 0 ? `${(count / maxActivity) * 100}%` : '0%',
+                    background: isCurrent
+                      ? `linear-gradient(90deg, ${C.accentDk}, ${C.accent})`
+                      : `rgba(123,168,232,0.55)`,
+                  }} />
+                </div>
+                <span style={{ fontSize:12, color: count>0 ? C.text : C.muted, width:16, textAlign:'right', flexShrink:0, fontWeight: count>0 ? 600 : 400 }}>
+                  {count || '—'}
+                </span>
               </div>
-            ))}
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:10, justifyContent:'flex-end' }}>
-            <span style={{ fontSize:10, color:C.muted }}>0</span>
-            {[0.15, 0.4, 0.7, 1].map(i => (
-              <div key={i} style={{ width:11, height:11, borderRadius:3, background:`rgba(123,168,232,${i})` }} />
-            ))}
-            <span style={{ fontSize:10, color:C.muted }}>max</span>
-          </div>
+            );
+          })}
         </div>
       )}
 
@@ -3669,14 +4080,28 @@ function StatsTab() {
               borderTop: i>0 ? `1px solid ${C.border}` : 'none',
             }}>
               <span style={{ fontSize:18 }}>{r.emoji}</span>
-              <span style={{ fontSize:12, color:C.soft, flex:1 }}>{r.name}</span>
+              <span style={{ fontSize:12, color:C.soft, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</span>
               {r.favorite && <span style={{ fontSize:12 }}>⭐</span>}
               {(r.tags||[]).length > 0 && (
-                <span style={{ fontSize:10, color:C.muted }}>{r.tags[0]}</span>
+                <span style={{ fontSize:10, color:C.muted, flexShrink:0 }}>{r.tags[0]}</span>
               )}
+              <button onClick={() => setAssignFromStats(r)} style={{
+                background:C.accentBg, border:`1px solid ${C.accent}44`,
+                color:C.accent, borderRadius:8, padding:'4px 9px',
+                cursor:'pointer', fontSize:11, fontWeight:600, flexShrink:0,
+              }}>📅</button>
             </div>
           ))}
         </div>
+      )}
+
+      {/* Modal d'affectation depuis les stats */}
+      {assignFromStats && (
+        <AssignToWeekModal
+          recipe={assignFromStats}
+          viewPortions={assignFromStats.portions || 4}
+          onClose={() => setAssignFromStats(null)}
+        />
       )}
     </div>
   );
@@ -3857,6 +4282,12 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.6.6</span> — Alerte re-planification semaine consécutive<br/>
+            <span style={{ color:C.accent }}>2.6.5</span> — Suggestions recettes (tri ancienneté + filtres tags) · 🎲 tirage pondéré<br/>
+            <span style={{ color:C.accent }}>2.6.4</span> — Mode courses (overlay) · Note par repas · Tap = suppression en mode courses<br/>
+            <span style={{ color:C.accent }}>2.6.3</span> — Stats bar chart · Jamais planifiées → 📅 direct · Import timeout 30s + chrono<br/>
+            <span style={{ color:C.accent }}>2.6.2</span> — Tri recettes · Recherche par ingrédient · Feedback stepper 👥<br/>
+            <span style={{ color:C.accent }}>2.6.1</span> — Suppression parseHtml (code mort) · deleteMeal → snack + Annuler<br/>
             <span style={{ color:C.accent }}>2.6.0</span> — Badge semaines planifiées dans la fiche recette<br/>
             <span style={{ color:C.accent }}>2.5.9</span> — Gestion singulier/pluriel français (mots-clés + fusion)<br/>
             <span style={{ color:C.accent }}>2.5.8</span> — Snacks succès/erreur sur toutes les actions · Détection quota localStorage<br/>

@@ -8,8 +8,8 @@ android {
         applicationId  "com.mealplan.app"
         minSdk         23
         targetSdk      34
-        versionCode    260
-        versionName    "2.6.0"
+        versionCode    266
+        versionName    "2.6.6"
     }
 
     signingConfigs {
