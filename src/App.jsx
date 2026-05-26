@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.7.3"; // v35
+const VERSION = "2.8.0"; // v41
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -277,7 +277,7 @@ function AppProvider({ children }) {
   const [meals,    setMeals]    = useState(() => loadFromStorage('mp_meals',     INIT_MEALS));
   const [shopping, setShopping] = useState(() => loadFromStorage('mp_shopping',  []));
   const [cats,     setCats]     = useState(() => loadFromStorage('mp_cats',      DEFAULT_CATS));
-  const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4 }));
+  const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4, householdSize: 6 }));
 
   const [snack,    setSnack]    = useState(null);
   const snackRef = useRef(null);
@@ -314,6 +314,14 @@ function AppProvider({ children }) {
   /* ── Recettes ── */
   const addRecipe    = d => { setRecipes(p => [{ ...d, id: genId(), createdAt: ts() }, ...p]); showSnack('✅ Recette créée'); };
   const updateRecipe = d => { setRecipes(p => p.map(r => r.id === d.id ? d : r)); showSnack('✅ Recette mise à jour'); };
+  const duplicateRecipe = id => {
+    const src = recipes.find(r => r.id === id);
+    if (!src) return null;
+    const copy = { ...src, id: genId(), name: `${src.name} (copie)`, createdAt: ts() };
+    setRecipes(p => [copy, ...p]);
+    showSnack(`📋 "${copy.name}" créée`);
+    return copy; // retourne l'objet pour ouvrir l'éditeur immédiatement
+  };
   const deleteRecipe = id => {
     const recipe        = recipes.find(r => r.id === id);
     const removedMeals  = meals.filter(m => m.recipeId === id);
@@ -509,7 +517,26 @@ function AppProvider({ children }) {
     const suffix = nMoved > 0 ? ` · ${nMoved} article${nMoved>1?'s':''} déplacés` : '';
     showSnack(`"${cat?.name || 'Catégorie'}" supprimée${suffix}`);
   };
-  const updateCat   = c    => setCats(p => p.map(x => x.id === c.id ? c : x));
+  const updateCat = c => {
+    const oldCat  = cats.find(x => x.id === c.id);
+    const newKws  = (c.kw || []).filter(k => !(oldCat?.kw || []).includes(k));
+    setCats(p => p.map(x => x.id === c.id ? c : x));
+    // Recatégorisation rétroactive : articles existants qui matchent les nouveaux mots-clés
+    if (newKws.length > 0) {
+      const toRec = shopping.filter(s =>
+        s.categoryId !== c.id &&
+        newKws.some(k => matchesKeyword(s.name.toLowerCase(), k))
+      );
+      if (toRec.length > 0) {
+        const prev = toRec.map(s => ({ id: s.id, categoryId: s.categoryId }));
+        setShopping(p => p.map(s => toRec.some(t => t.id === s.id) ? { ...s, categoryId: c.id } : s));
+        showSnack(
+          `${toRec.length} article${toRec.length>1?'s':''} déplacés vers ${c.emoji} ${c.name}`,
+          () => setShopping(p => p.map(s => { const o = prev.find(x => x.id === s.id); return o ? { ...s, categoryId: o.categoryId } : s; }))
+        );
+      }
+    }
+  };
   const reorderCats = list => setCats(list.map((c, i) => ({ ...c, order: i })));
   const updSettings = patch => setSettings(p => ({ ...p, ...patch }));
 
@@ -524,7 +551,7 @@ function AppProvider({ children }) {
   return (
     <AppCtx.Provider value={{
       recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
-      addRecipe, updateRecipe, deleteRecipe,
+      addRecipe, updateRecipe, duplicateRecipe, deleteRecipe,
       addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek,
       addShoppingItem, deleteShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
       reorderItemsInCat, addCat, deleteCat, updateCat, reorderCats, updSettings, importAllData,
@@ -1223,7 +1250,7 @@ function PlanningTab() {
         />
       )}
       {viewRecipe && (
-        <RecipeDetail recipe={viewRecipe}
+        <RecipeDetail recipe={recipes.find(r => r.id === viewRecipe.id) || viewRecipe}
           onClose={() => setViewRecipe(null)}
           onEdit={null}
           onDelete={null}
@@ -1452,9 +1479,9 @@ function MealItem({ meal, recipe, onViewRecipe }) {
 }
 
 function RecipePicker({ onClose, onSelect }) {
-  const { recipes, meals } = useApp();
+  const { recipes, meals, settings } = useApp();
   const [search,      setSearch]      = useState('');
-  const [persons,     setPersons]     = useState(6);
+  const [persons,     setPersons]     = useState(settings.householdSize || 6);
   const [selected,    setSelected]    = useState(new Set());
   const [suggestMode, setSuggestMode] = useState(false);
   const [tagFilter,   setTagFilter]   = useState(null);
@@ -1551,7 +1578,7 @@ function RecipePicker({ onClose, onSelect }) {
         </div>
 
         {/* ── Ligne 2 : recherche + 🎲 ── */}
-        <div style={{ display:'flex', gap:6, marginBottom:suggestMode && allTags.length ? 8 : 0 }}>
+        <div style={{ display:'flex', gap:6, marginBottom: allTags.length ? 8 : 0 }}>
           <input placeholder="🔍 Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}
             style={{ flex:1, padding:'7px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none' }}
           />
@@ -1567,8 +1594,8 @@ function RecipePicker({ onClose, onSelect }) {
           >🎲</button>
         </div>
 
-        {/* ── Filtres par tag (mode suggestions) ── */}
-        {suggestMode && allTags.length > 0 && (
+        {/* ── Filtres par tag (tous modes) ── */}
+        {allTags.length > 0 && (
           <div style={{ display:'flex', gap:5, overflowX:'auto', paddingBottom:6, marginBottom:4,
             scrollbarWidth:'none', WebkitOverflowScrolling:'touch' }}>
             <button onClick={() => setTagFilter(null)} style={{
@@ -1576,7 +1603,7 @@ function RecipePicker({ onClose, onSelect }) {
               color: !tagFilter ? C.accent : C.muted,
               border: !tagFilter ? `1px solid ${C.accent}44` : '1px solid transparent',
               borderRadius:20, padding:'4px 12px', fontSize:11, cursor:'pointer', fontWeight: !tagFilter?700:400,
-            }}>Toutes</button>
+            }}>Tous</button>
             {allTags.map(t => (
               <button key={t} onClick={() => setTagFilter(tagFilter===t ? null : t)} style={{
                 flexShrink:0, background: tagFilter===t ? C.accentBg : C.border,
@@ -1589,7 +1616,7 @@ function RecipePicker({ onClose, onSelect }) {
         )}
 
         {/* ── Liste de recettes ── */}
-        <div style={{ maxHeight:340, overflowY:'auto', marginTop:suggestMode && allTags.length ? 0 : 8 }}>
+        <div style={{ maxHeight:340, overflowY:'auto', marginTop: allTags.length ? 0 : 8 }}>
           {filtered.map((r, idx) => {
             const isSelected = selected.has(r.id);
             const lul        = lastUsedLabel(r);
@@ -1793,6 +1820,7 @@ function RecipesTab() {
           onClose={() => setDetailId(null)}
           onEdit={() => { setEditRec({ ...detailRecipe }); setDetailId(null); }}
           onDelete={() => { deleteRecipe(detailRecipe.id); setDetailId(null); }}
+          onDuplicate={copy => { setDetailId(null); setEditRec({ ...copy }); }}
         />
       )}
 
@@ -1915,10 +1943,10 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
 }
 
 function AssignToWeekModal({ recipe, viewPortions, onClose }) {
-  const { addMeal, addIngredientsFromRecipe, cats, showSnack } = useApp();
+  const { addMeal, addIngredientsFromRecipe, cats, showSnack, settings } = useApp();
   const currentWeek = getISOWeekKey();
   const [selWeek,      setSelWeek]      = useState(currentWeek);
-  const [persons,      setPersons]      = useState(viewPortions || 6);
+  const [persons,      setPersons]      = useState(viewPortions || settings.householdSize || 6);
   const [done,         setDone]         = useState(false);
   const [filterOpen,   setFilterOpen]   = useState(false);
   const [multiCatData, setMultiCatData] = useState(null);
@@ -2041,6 +2069,14 @@ function RecipeCard({ recipe, onClick, onDelete }) {
               </span>
             )}
           </div>
+          {(recipe.tags||[]).length > 0 && (
+            <div style={{ display:'flex', gap:3, flexWrap:'wrap', marginTop:4 }}>
+              {recipe.tags.slice(0,2).map(t => (
+                <span key={t} style={{ fontSize:9, color:C.accent, background:C.accentBg, padding:'1px 6px', borderRadius:10 }}>{t}</span>
+              ))}
+              {recipe.tags.length > 2 && <span style={{ fontSize:9, color:C.muted }}>+{recipe.tags.length-2}</span>}
+            </div>
+          )}
         </div>
 
         {/* Étoile favoris + suppression */}
@@ -2060,11 +2096,10 @@ function RecipeCard({ recipe, onClick, onDelete }) {
   );
 }
 
-function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
+function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
   useBackHandler(onClose);
-  const { meals, showSnack, updateRecipe } = useApp();
+  const { meals, showSnack, updateRecipe, duplicateRecipe } = useApp();
   const [checked,     setChecked]     = useState(new Set());
-  const [confirmDel,  setConfirmDel]  = useState(false);
   const [viewPortions, setViewPortions] = useState(recipe.portions || 4);
   const [assignOpen,  setAssignOpen]  = useState(false);
 
@@ -2222,12 +2257,14 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete }) {
           </div>
         )}
 
-        <div style={{ marginTop:20, paddingTop:14, borderTop:`1px solid ${C.border}` }}>
+        <div style={{ marginTop:20, paddingTop:14, borderTop:`1px solid ${C.border}`, display:'flex', gap:8, flexWrap:'wrap' }}>
+          <Btn onClick={() => {
+            const copy = duplicateRecipe(recipe.id);
+            if (copy && onDuplicate) onDuplicate(copy);
+            else onClose();
+          }} small>📋 Dupliquer</Btn>
           {onDelete && (
-            <Btn onClick={() => { if(confirmDel) onDelete(); else { setConfirmDel(true); setTimeout(()=>setConfirmDel(false),3000); } }}
-              variant="danger" small>
-              {confirmDel ? '⚠️ Confirmer' : '🗑 Supprimer la recette'}
-            </Btn>
+            <Btn onClick={onDelete} variant="danger" small>🗑 Supprimer la recette</Btn>
           )}
         </div>
       </div>
@@ -2657,7 +2694,7 @@ function parseHtmlContent(doc) {
 }
 
 function RecipeEditor({ recipe, onClose, onSave }) {
-  useBackHandler(onClose);
+  useBackHandler(tryClose);
   const { recipes } = useApp();
   const [form, setForm] = useState({
     ...recipe,
@@ -2665,6 +2702,25 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     ingredients: recipe.ingredients?.length ? recipe.ingredients.map(i=>({...i})) : [{ id:genId(), name:'', qty:'', unit:'' }],
     steps: recipe.steps?.length ? [...recipe.steps] : [''],
   });
+  const [closeWarning, setCloseWarning] = useState(false);
+
+  // Snapshot initial pour détecter les modifications non sauvegardées
+  const initialRef = useRef(null);
+  const snapshot = () => JSON.stringify({
+    name: form.name, emoji: form.emoji, portions: form.portions,
+    cookTimeMinutes: form.cookTimeMinutes, rating: form.rating,
+    tagsStr: form.tagsStr, note: form.note,
+    ingredients: form.ingredients.filter(i => i.name.trim()),
+    steps: form.steps.filter(s => s.trim()),
+  });
+  if (initialRef.current === null) initialRef.current = snapshot();
+
+  const hasChanges = () => snapshot() !== initialRef.current;
+
+  function tryClose() {
+    if (hasChanges()) setCloseWarning(true);
+    else onClose();
+  }
 
   // ── Import state ──────────────────────────────────
   const [importUrl,   setImportUrl]   = useState(recipe.url || '');
@@ -2675,7 +2731,8 @@ function RecipeEditor({ recipe, onClose, onSave }) {
   const [pasteText,   setPasteText]   = useState('');
   const [importStep,  setImportStep]  = useState('');
   const [elapsed,     setElapsed]     = useState(0);
-  const [dupWarning,  setDupWarning]  = useState(null); // recette existante en doublon
+  const [dupWarning,  setDupWarning]  = useState(null);
+  const abortRef = useRef(null); // AbortController pour annuler l'import
 
   // Compteur de secondes pendant l'import
   useEffect(() => {
@@ -2684,10 +2741,16 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     return () => clearInterval(id);
   }, [importing]);
 
-  /** Race contre un timeout de 30 s */
+  /** Race contre un timeout de 30 s et un AbortController optionnel */
   const withTimeout = (promise, ms = 30000) => Promise.race([
     promise,
     new Promise((_, rej) => setTimeout(() => rej(new Error(`Délai dépassé (${ms/1000}s) — essaie de coller le texte manuellement`)), ms)),
+    new Promise((_, rej) => {
+      const ctrl = abortRef.current;
+      if (!ctrl) return;
+      if (ctrl.signal.aborted) { rej(new Error('Import annulé')); return; }
+      ctrl.signal.addEventListener('abort', () => rej(new Error('Import annulé')));
+    }),
   ]);
 
   // Détecte un doublon par URL exacte ou par nom identique (hors modification d'une recette existante)
@@ -2790,6 +2853,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
 
   // ── Handler principal ──────────────────────────────
   const handleImport = async () => {
+    abortRef.current = new AbortController();
     setImporting(true); setImportError(''); setImportDone(false); setImportStep('');
     try {
       let raw = null;
@@ -2935,7 +2999,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         padding:'10px 16px', display:'flex', justifyContent:'space-between', alignItems:'center',
         position:'sticky', top:0, zIndex:10,
       }}>
-        <Btn onClick={onClose} small>Annuler</Btn>
+        <Btn onClick={tryClose} small>Annuler</Btn>
         <span style={{ fontWeight:700, color:C.text }}>{form.id ? 'Modifier la recette' : 'Nouvelle recette'}</span>
         <Btn onClick={handleSave} variant="primary" small disabled={!form.name.trim() || !!dupWarning}>Enregistrer</Btn>
       </div>
@@ -2997,24 +3061,24 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
               </Btn>
             </>)}
 
-            {/* Étape en cours + chrono */}
+            {/* Étape en cours + chrono + annuler */}
             {importing && (
-              <div style={{ marginTop:10, display:'flex', alignItems:'center', gap:8, color:C.accent, fontSize:12 }}>
-                <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>⚙️</span>
-                <span style={{ flex:1 }}>{importStep || 'Analyse en cours…'}</span>
-                <span style={{ color:C.muted, fontSize:11, flexShrink:0 }}>{elapsed}s / 30s</span>
-              </div>
-            )}
-            {/* Barre de progression du timeout */}
-            {importing && (
-              <div style={{ marginTop:6, height:3, background:C.border, borderRadius:2, overflow:'hidden' }}>
-                <div style={{
-                  height:'100%', borderRadius:2, background:C.accent,
-                  width:`${Math.min((elapsed/30)*100,100)}%`,
-                  transition:'width 1s linear',
-                  opacity: elapsed > 20 ? 1 : 0.6,
-                  backgroundColor: elapsed > 20 ? C.orange : C.accent,
-                }} />
+              <div style={{ marginTop:10 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, color:C.accent, fontSize:12 }}>
+                  <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>⚙️</span>
+                  <span style={{ flex:1 }}>{importStep || 'Analyse en cours…'}</span>
+                  <span style={{ color:C.muted, fontSize:11, flexShrink:0 }}>{elapsed}s / 30s</span>
+                  <button onClick={() => { abortRef.current?.abort(); setImporting(false); setImportStep(''); setImportError('Import annulé.'); }} style={{
+                    background:C.redBg, border:`1px solid ${C.red}44`, color:C.red,
+                    borderRadius:7, padding:'3px 9px', fontSize:11, cursor:'pointer', flexShrink:0,
+                  }}>✕ Annuler</button>
+                </div>
+                <div style={{ marginTop:6, height:3, background:C.border, borderRadius:2, overflow:'hidden' }}>
+                  <div style={{
+                    height:'100%', borderRadius:2, background: elapsed > 20 ? C.orange : C.accent,
+                    width:`${Math.min((elapsed/30)*100,100)}%`, transition:'width 1s linear',
+                  }} />
+                </div>
               </div>
             )}
             {/* Succès */}
@@ -3157,6 +3221,25 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         </div>
       </div>
     </div>
+
+    {/* ── Confirmation quitter sans sauvegarder ── */}
+    {closeWarning && (
+      <BottomSheet title="⚠️ Modifications non sauvegardées" onClose={() => setCloseWarning(false)}>
+        <div style={{ padding:'10px 16px 24px' }}>
+          <p style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.5 }}>
+            Tu as des modifications en cours.{'\n'}Quitter sans sauvegarder ?
+          </p>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn onClick={() => setCloseWarning(false)} style={{ flex:1, justifyContent:'center' }}>
+              Continuer l'édition
+            </Btn>
+            <Btn onClick={onClose} variant="danger" style={{ flex:1, justifyContent:'center' }}>
+              Quitter
+            </Btn>
+          </div>
+        </div>
+      </BottomSheet>
+    )}
   );
 }
 
@@ -3382,13 +3465,12 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
 //  COURSES TAB
 // ══════════════════════════════════════════════════════
 function ShoppingTab() {
-  const { shopping, cats, addShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll, showSnack, reorderCats, updateCat } = useApp();
+  const { shopping, cats, recipes, meals, addShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll, showSnack, reorderCats, updateCat } = useApp();
   const [newName,  setNewName]  = useState('');
   const [newQty,   setNewQty]   = useState('');
   const [newUnit,  setNewUnit]  = useState('');
   const [shopMode,     setShopMode]     = useState(false);
   const [menuOpen,     setMenuOpen]     = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
   const [dragOverCat,  setDragOverCat]  = useState(null);
   const [dragLineCat,  setDragLineCat]  = useState(null); // 'before'|'after' relative to dragOverCat
   const dragRef    = useRef({ type: null, id: null, catId: null });
@@ -3483,11 +3565,33 @@ function ShoppingTab() {
   };
 
   const shareList = () => {
-    const text = sortedCats.map(cat => {
-      const items = shopping.filter(s => s.categoryId===cat.id);
+    // En-tête : recettes planifiées cette semaine
+    const currentWeek = getISOWeekKey();
+    const weekMeals   = meals.filter(m => m.weekKey === currentWeek);
+    const recipeLines = weekMeals.map(m => {
+      const r = recipes.find(x => x.id === m.recipeId);
+      return r ? `  ${r.emoji} ${r.name} (${m.persons} pers.)` : '';
+    }).filter(Boolean);
+
+    let text = '🛒 Liste de courses\n';
+    if (recipeLines.length) {
+      text += `\n📅 Recettes de la semaine\n${recipeLines.join('\n')}\n`;
+    }
+
+    // Articles non cochés, groupés par catégorie, avec nom de recette si applicable
+    const catText = sortedCats.map(cat => {
+      const items = shopping.filter(s => s.categoryId === cat.id && !s.checked);
       if (!items.length) return '';
-      return `${cat.emoji} ${cat.name}\n${items.map(i => `  · ${i.name}${i.qty?` – ${i.qty}${i.unit?' '+i.unit:''}`:''}${i.fromRecipeId?' 📅':''}`).join('\n')}`;
-    }).filter(Boolean).join('\n\n');
+      const lines = items.map(i => {
+        const qtyStr    = i.qty ? ` – ${i.qty}${i.unit ? '\u202f' + i.unit : ''}` : '';
+        const recipeName = i.fromRecipeId ? recipes.find(r => r.id === i.fromRecipeId)?.name : null;
+        const srcStr    = recipeName ? ` (${recipeName})` : '';
+        return `  · ${i.name}${qtyStr}${srcStr}`;
+      }).join('\n');
+      return `\n${cat.emoji} ${cat.name}\n${lines}`;
+    }).filter(Boolean).join('');
+
+    text += catText || '\n(liste vide)';
     if (navigator.share) navigator.share({ title:'Liste de courses', text });
     else navigator.clipboard?.writeText(text).then(() => showSnack('Liste copiée'));
   };
@@ -3552,26 +3656,10 @@ function ShoppingTab() {
                     borderBottom:`1px solid ${C.border}`,
                   }}>✅ Vider les cochés ({checkedCount})</button>
                 )}
-                {!confirmClear ? (
-                  <button onClick={() => setConfirmClear(true)} style={{
+                  <button onClick={() => { clearAll(); setMenuOpen(false); }} style={{
                     display:'block', width:'100%', padding:'10px 14px', background:'none',
                     color:C.red, border:'none', textAlign:'left', cursor:'pointer', fontSize:13,
                   }}>🗑 Tout vider</button>
-                ) : (
-                  <div style={{ padding:'10px 14px' }}>
-                    <div style={{ fontSize:12, color:C.red, marginBottom:8, fontWeight:600 }}>Vider toute la liste ?</div>
-                    <div style={{ display:'flex', gap:6 }}>
-                      <button onClick={() => { clearAll(); setMenuOpen(false); setConfirmClear(false); }} style={{
-                        flex:1, padding:'6px', borderRadius:7, border:'none',
-                        background:C.red, color:'#fff', fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight:600,
-                      }}>Confirmer</button>
-                      <button onClick={() => setConfirmClear(false)} style={{
-                        flex:1, padding:'6px', borderRadius:7, border:`1px solid ${C.border}`,
-                        background:'transparent', color:C.muted, fontSize:12, cursor:'pointer', fontFamily:'inherit',
-                      }}>Annuler</button>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -3660,11 +3748,19 @@ function ShoppingTab() {
 
 function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
   useBackHandler(onExit);
-  // Seulement les articles non cochés, groupés par catégorie
-  const unchecked = shopping.filter(s => !s.checked);
-  const total     = shopping.length;       // total initial (ne change pas pendant la session)
-  const done      = total - unchecked.length;
-  const allGone   = unchecked.length === 0;
+  const { clearChecked } = useApp();
+  const [clearPrompt, setClearPrompt] = useState(false);
+
+  const unchecked  = shopping.filter(s => !s.checked);
+  const checkedCnt = shopping.filter(s =>  s.checked).length;
+  const total      = shopping.length;
+  const done       = total - unchecked.length;
+  const allGone    = unchecked.length === 0;
+
+  const handleExit = () => {
+    if (checkedCnt > 0) setClearPrompt(true);
+    else onExit();
+  };
 
   return (
     <div style={{
@@ -3687,7 +3783,7 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
               {allGone ? 'Tout est dans le chariot !' : `${unchecked.length} article${unchecked.length>1?'s':''} restant${unchecked.length>1?'s':''}`}
             </div>
           </div>
-          <button onClick={onExit} style={{
+          <button onClick={handleExit} style={{
             background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.12)',
             color:'#7EC8FF', borderRadius:10, padding:'7px 14px',
             fontSize:12, fontWeight:600, cursor:'pointer',
@@ -3713,7 +3809,7 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
             <div style={{ fontSize:52, marginBottom:16 }}>✅</div>
             <div style={{ fontSize:18, fontWeight:800, color:C.green, marginBottom:8 }}>Courses terminées !</div>
             <div style={{ fontSize:13, color:C.muted, marginBottom:24 }}>Tous les articles ont été récupérés.</div>
-            <button onClick={onExit} style={{
+            <button onClick={handleExit} style={{
               background:C.accentDk, border:'none', color:'#fff',
               borderRadius:12, padding:'12px 28px', fontSize:14, fontWeight:700, cursor:'pointer',
             }}>← Retour à la liste</button>
@@ -3767,6 +3863,32 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
           })
         )}
       </div>
+
+      {/* ── Prompt de nettoyage à la sortie ── */}
+      {clearPrompt && (
+        <div style={{
+          position:'absolute', bottom:0, left:0, right:0,
+          background:C.card, borderTop:`1px solid ${C.border}`,
+          padding:'16px 16px 28px',
+        }}>
+          <div style={{ fontSize:13, color:C.text, fontWeight:600, marginBottom:4 }}>
+            {checkedCnt} article{checkedCnt>1?'s':''} récupérés
+          </div>
+          <div style={{ fontSize:12, color:C.muted, marginBottom:14 }}>
+            Vider les articles récupérés de la liste ?
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={() => { clearChecked(); onExit(); }} style={{
+              flex:2, padding:'11px', background:C.green, border:'none',
+              color:'#fff', borderRadius:10, fontWeight:700, fontSize:13, cursor:'pointer',
+            }}>🗑 Vider ({checkedCnt})</button>
+            <button onClick={onExit} style={{
+              flex:1, padding:'11px', background:C.border, border:'none',
+              color:C.muted, borderRadius:10, fontSize:13, cursor:'pointer',
+            }}>Garder</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3991,6 +4113,7 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
 function StatsTab() {
   const { recipes, meals } = useApp();
   const [assignFromStats, setAssignFromStats] = useState(null);
+  const [viewFromStats,   setViewFromStats]   = useState(null);
 
   // ── Calculs de base ──
   const favCount     = recipes.filter(r => r.favorite).length;
@@ -4035,7 +4158,13 @@ function StatsTab() {
 
   // ── Recettes jamais planifiées ──
   const usedIds      = new Set(meals.map(m => m.recipeId));
-  const neverPlanned = recipes.filter(r => !usedIds.has(r.id));
+  const neverPlanned = recipes
+    .filter(r => !usedIds.has(r.id))
+    .sort((a, b) => {
+      if (a.favorite && !b.favorite) return -1;
+      if (!a.favorite && b.favorite) return 1;
+      return a.name.localeCompare(b.name, 'fr');
+    });
 
   const fmtDate = ts => ts
     ? new Date(ts).toLocaleDateString('fr-FR', { day:'numeric', month:'short' })
@@ -4181,7 +4310,10 @@ function StatsTab() {
               borderTop: i>0 ? `1px solid ${C.border}` : 'none',
             }}>
               <span style={{ fontSize:18 }}>{r.emoji}</span>
-              <span style={{ fontSize:12, color:C.soft, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</span>
+              <span
+                onClick={() => setViewFromStats(r)}
+                style={{ fontSize:12, color:C.soft, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', cursor:'pointer' }}
+              >{r.name}</span>
               {r.favorite && <span style={{ fontSize:12 }}>⭐</span>}
               {(r.tags||[]).length > 0 && (
                 <span style={{ fontSize:10, color:C.muted, flexShrink:0 }}>{r.tags[0]}</span>
@@ -4194,6 +4326,14 @@ function StatsTab() {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Fiche recette depuis les stats */}
+      {viewFromStats && (
+        <RecipeDetail recipe={recipes.find(r => r.id === viewFromStats.id) || viewFromStats}
+          onClose={() => setViewFromStats(null)}
+          onEdit={null} onDelete={null}
+        />
       )}
 
       {/* Modal d'affectation depuis les stats */}
@@ -4304,6 +4444,27 @@ function SettingsTab() {
         })}
       </div>
 
+      {/* ── Taille du foyer ── */}
+      <SecTitle>Taille du foyer</SecTitle>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+        <span style={{ fontSize:13, color:C.muted, flex:1 }}>
+          Nombre de personnes par défaut pour les repas planifiés
+        </span>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <button onClick={() => updSettings({ householdSize: Math.max(1, (settings.householdSize||6) - 1) })} style={{
+            background:C.border, border:'none', color:C.text,
+            width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
+          }}>−</button>
+          <span style={{ fontWeight:700, fontSize:18, color:C.accent, minWidth:28, textAlign:'center' }}>
+            {settings.householdSize || 6}
+          </span>
+          <button onClick={() => updSettings({ householdSize: Math.min(20, (settings.householdSize||6) + 1) })} style={{
+            background:C.border, border:'none', color:C.text,
+            width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
+          }}>+</button>
+        </div>
+      </div>
+
       {/* ── Catégories ── */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
         <SecTitle style={{ margin:0 }}>Catégories de courses</SecTitle>
@@ -4405,6 +4566,12 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.8.0</span> — Dupliquer → éditeur · Recatégorisation rétroactive · Annuler import · Tags RecipeCard · Tri jamais planifiées · Vider à la sortie mode courses<br/>
+            <span style={{ color:C.accent }}>2.7.8</span> — Dupliquer une recette · Partage liste courses enrichi<br/>
+            <span style={{ color:C.accent }}>2.7.7</span> — Tags RecipePicker dans les deux modes · Stats jamais planifiées → fiche recette<br/>
+            <span style={{ color:C.accent }}>2.7.6</span> — Taille du foyer configurable dans Options (défaut : 6)<br/>
+            <span style={{ color:C.accent }}>2.7.5</span> — RecipeEditor avertissement changements non sauvegardés · viewRecipe live<br/>
+            <span style={{ color:C.accent }}>2.7.4</span> — Suppression doubles confirmations deleteRecipe + clearAll<br/>
             <span style={{ color:C.accent }}>2.7.3</span> — Retour inter-onglets via historique de navigation<br/>
             <span style={{ color:C.accent }}>2.7.2</span> — Bouton retour Android via bridge JS (fix file:// popstate)<br/>
             <span style={{ color:C.accent }}>2.7.1</span> — Bouton retour Android (toutes modals/overlays)<br/>
