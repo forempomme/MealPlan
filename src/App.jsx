@@ -3217,30 +3217,30 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         </div>
         <div style={{ marginBottom:20 }}>
           <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🔗 Source (URL)</label>
-          <input value={form.url} onChange={e=>set('url',e.target.value)} placeholder="https://..." style={inp} />
-        </div>
-            </div>
-    </div>
-
-    {/* ── Confirmation quitter sans sauvegarder ── */}
-    {closeWarning && (
-      <BottomSheet title="⚠️ Modifications non sauvegardées" onClose={() => setCloseWarning(false)}>
-        <div style={{ padding:'10px 16px 24px' }}>
-          <p style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.5 }}>
-            Tu as des modifications en cours.{'\n'}Quitter sans sauvegarder ?
-          </p>
-          <div style={{ display:'flex', gap:8 }}>
-            <Btn onClick={() => setCloseWarning(false)} style={{ flex:1, justifyContent:'center' }}>
-              Continuer l'édition
-            </Btn>
-            <Btn onClick={onClose} variant="danger" style={{ flex:1, justifyContent:'center' }}>
-              Quitter
-            </Btn>
-          </div>
-        </div>
-      </BottomSheet>
-    )}
-  );
+          3220|           <input value={form.url} onChange={e=>set('url',e.target.value)} placeholder="https://..." style={inp} />
+3221|         </div>
+3222| 
+3223|         {/* ── Confirmation quitter sans sauvegarder ── */}
+3224|         {closeWarning && (
+3225|           <BottomSheet title="⚠️ Modifications non sauvegardées" onClose={() => setCloseWarning(false)}>
+3226|             <div style={{ padding:'10px 16px 24px' }}>
+3227|               <p style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.5 }}>
+3228|                 Tu as des modifications en cours.{'\n'}Quitter sans sauvegarder ?
+3229|               </p>
+3230|               <div style={{ display:'flex', gap:8 }}>
+3231|                 <Btn onClick={() => setCloseWarning(false)} style={{ flex:1, justifyContent:'center' }}>
+3232|                   Continuer l'édition
+3233|                 </Btn>
+3234|                 <Btn onClick={onClose} variant="danger" style={{ flex:1, justifyContent:'center' }}>
+3235|                   Quitter
+3236|                 </Btn>
+3237|               </div>
+3238|             </div>
+3239|           </BottomSheet>
+3240|         )}
+3241|       </div>
+3242|     );
+3243|   }
 }
     )}
   );
