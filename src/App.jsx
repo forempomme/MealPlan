@@ -3219,7 +3219,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
           <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🔗 Source (URL)</label>
           <input value={form.url} onChange={e=>set('url',e.target.value)} placeholder="https://..." style={inp} />
         </div>
-      </div>
+            </div>
     </div>
 
     {/* ── Confirmation quitter sans sauvegarder ── */}
@@ -3239,6 +3239,9 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
           </div>
         </div>
       </BottomSheet>
+    )}
+  );
+}
     )}
   );
 }
