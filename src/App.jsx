@@ -3238,11 +3238,13 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
              </div>
            </BottomSheet>
          )}
-       </div>
-     );
-   }
+        </div>
+      </div>
+    );
+  }
 }
-    )}
+
+function MultiCategoryAssignModal({ uncatItems, onConfirm, onCancel }) {
   );
 }
 
