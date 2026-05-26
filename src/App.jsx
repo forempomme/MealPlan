@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.7.2"; // v34
+const VERSION = "2.7.3"; // v35
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -4405,6 +4405,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.7.3</span> — Retour inter-onglets via historique de navigation<br/>
             <span style={{ color:C.accent }}>2.7.2</span> — Bouton retour Android via bridge JS (fix file:// popstate)<br/>
             <span style={{ color:C.accent }}>2.7.1</span> — Bouton retour Android (toutes modals/overlays)<br/>
             <span style={{ color:C.accent }}>2.7.0</span> — fromMealId (rescaling précis) · deleteRecipe undo · RecipeCard direct delete · RecipeDetail favori inline · null guards onEdit/onDelete · MIN_YEAR dynamique · weeksToShow · recipeScore O(N)<br/>
@@ -4561,8 +4562,25 @@ function Snackbar() {
 //  APP SHELL
 // ══════════════════════════════════════════════════════
 function AppShell() {
-  const [tab, setTab] = useState('shopping');
+  const [tab,        setTab]        = useState('shopping');
+  const [tabHistory, setTabHistory] = useState([]);
   const mainRef = useRef(null);
+
+  // Navigation d'onglet avec historique pour le bouton retour
+  const changeTab = (newTab) => {
+    if (newTab === tab) return;
+    setTabHistory(h => [...h, tab]);
+    setTab(newTab);
+  };
+
+  const popTab = () => {
+    const prev = tabHistory[tabHistory.length - 1];
+    setTabHistory(h => h.slice(0, -1));
+    if (prev) setTab(prev);
+  };
+
+  // Enregistre le retour inter-onglets (priorité basse : les modals prennent la main)
+  useBackHandler(popTab, tabHistory.length > 0);
 
   useEffect(() => {
     if (mainRef.current) mainRef.current.scrollTop = 0;
@@ -4578,7 +4596,7 @@ function AppShell() {
         {tab === 'stats'    && <StatsTab />}
         {tab === 'settings' && <SettingsTab />}
       </main>
-      <BottomNav tab={tab} setTab={setTab} />
+      <BottomNav tab={tab} setTab={changeTab} />
       <Snackbar />
     </div>
   );
