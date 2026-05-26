@@ -3048,6 +3048,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
   const inp = { padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:14, outline:'none', width:'100%' };
 
   return (
+    <>
     <div style={{ position:'fixed', inset:0, zIndex:600, background:C.bg, overflowY:'auto', animation:'fadeIn 0.18s' }}>
       <div style={{
         background:C.card, borderBottom:`1px solid ${C.border}`,
@@ -3295,6 +3296,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         </div>
       </BottomSheet>
     )}
+  </>
   );
 }
 
