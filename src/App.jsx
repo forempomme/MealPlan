@@ -3,53 +3,39 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.7.1"; // v33
+const VERSION = "2.7.2"; // v34
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
-//  Chaque modal/overlay enregistre son handler via useBackHandler.
-//  history.pushState crée une entrée ; popstate la consomme au retour.
+//  Android appelle window.__mpBack() via evaluateJavascript.
+//  Retourne true si une modal a été fermée, false sinon (Android ferme l'app).
 // ══════════════════════════════════════════════════════
-let   _backReady  = false;
-let   _skipNext   = false;
-let   _backIdCtr  = 0;
-const _backMap    = new Map(); // id → () => void
+const _backStack = [];
 
-function _initAndroidBack() {
-  if (_backReady || typeof window === 'undefined') return;
-  _backReady = true;
-  window.addEventListener('popstate', (e) => {
-    if (_skipNext) { _skipNext = false; return; }
-    const id = e.state?._bid;
-    if (id && _backMap.has(id)) {
-      const fn = _backMap.get(id);
-      _backMap.delete(id);
-      fn();
+if (typeof window !== 'undefined') {
+  window.__mpBack = () => {
+    if (_backStack.length > 0) {
+      _backStack[_backStack.length - 1](); // ferme la modal la plus haute
+      return true;
     }
-  });
+    return false;
+  };
 }
 
 /**
  * Enregistre un handler "fermeture" pour le bouton retour Android.
- * enabled=false → ne fait rien (utile pour les overlays conditionnels).
+ * enabled=false désactive le hook (utile pour les overlays conditionnels).
  */
 function useBackHandler(onClose, enabled = true) {
   const ref = useRef(onClose);
   ref.current = onClose;
   useEffect(() => {
     if (!enabled) return;
-    _initAndroidBack();
-    const id = ++_backIdCtr;
-    window.history.pushState({ _bid: id }, '');
-    _backMap.set(id, () => ref.current());
+    const fn = () => ref.current();
+    _backStack.push(fn);
     return () => {
-      if (_backMap.has(id)) {
-        // Fermeture via bouton (pas via retour) : consomme l'entrée proprement
-        _backMap.delete(id);
-        _skipNext = true;
-        window.history.back();
-      }
-      // Sinon : déjà fermé via retour (popstate l'a effacé), rien à faire
+      const i = _backStack.lastIndexOf(fn);
+      if (i !== -1) _backStack.splice(i, 1);
     };
   }, [enabled]);
 }
@@ -4419,6 +4405,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.7.2</span> — Bouton retour Android via bridge JS (fix file:// popstate)<br/>
             <span style={{ color:C.accent }}>2.7.1</span> — Bouton retour Android (toutes modals/overlays)<br/>
             <span style={{ color:C.accent }}>2.7.0</span> — fromMealId (rescaling précis) · deleteRecipe undo · RecipeCard direct delete · RecipeDetail favori inline · null guards onEdit/onDelete · MIN_YEAR dynamique · weeksToShow · recipeScore O(N)<br/>
             <span style={{ color:C.accent }}>2.6.6</span> — Alerte re-planification semaine consécutive<br/>

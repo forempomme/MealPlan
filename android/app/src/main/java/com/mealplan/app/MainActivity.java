@@ -108,7 +108,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override public void onBackPressed() {
-        if (webView.canGoBack()) webView.goBack(); else super.onBackPressed();
+        // Demande à JS de gérer le retour (fermer la modal ouverte si besoin).
+        // La fonction __mpBack retourne true si elle a géré l'événement.
+        webView.evaluateJavascript(
+            "(function(){ return !!(window.__mpBack && window.__mpBack()); })()",
+            result -> runOnUiThread(() -> {
+                if (!"true".equals(result)) finish(); // JS n'a pas géré → ferme l'app
+            })
+        );
     }
     @Override protected void onPause()  { webView.onPause();  super.onPause(); }
     @Override protected void onResume() { super.onResume();   webView.onResume(); }
