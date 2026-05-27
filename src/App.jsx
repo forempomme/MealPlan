@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.9.0"; // v42
+const VERSION = "2.9.2"; // v44
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -977,7 +977,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 //  PLANNING TAB
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
-  const { meals, recipes, cats, settings, planningTarget, setPlanningTarget, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack } = useApp();
+  const { meals, recipes, cats, settings, planningTarget, setPlanningTarget, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack, updSettings } = useApp();
   const [pickerWeek,   setPickerWeek]   = useState(null);
   const [dupWeek,      setDupWeek]      = useState(null);
   const [filterData,   setFilterData]   = useState(null);
@@ -1002,6 +1002,8 @@ function PlanningTab() {
   useEffect(() => {
     if (!planningTarget) return;
     const targetYear = parseInt(planningTarget.split('-W')[0]);
+    // Si en mode fenêtre glissante, basculer en vue annuelle pour que la semaine soit visible
+    if (weeksToShow > 0) updSettings({ weeksToShow: 0 });
     if (!isNaN(targetYear)) setYear(targetYear);
     setTimeout(() => {
       const el = document.querySelector(`[data-week="${planningTarget}"]`);
@@ -1521,6 +1523,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
     const [cy, cw] = currentWeek.split('-W').map(Number);
     const latestByRecipe = {};
     meals.forEach(m => {
+      if (!m.recipeId) return; // custom meals exclus du calcul de score
       if (!latestByRecipe[m.recipeId] || m.weekKey > latestByRecipe[m.recipeId])
         latestByRecipe[m.recipeId] = m.weekKey;
     });
@@ -2149,12 +2152,87 @@ function RecipeCard({ recipe, onClick, onDelete }) {
   );
 }
 
+/** Ajouter les ingrédients d'une recette à la liste sans planifier de repas */
+function AddToListModal({ recipe, defaultPersons, onClose }) {
+  const { cats, addIngredientsFromRecipe, showSnack, settings } = useApp();
+  const [persons,      setPersons]      = useState(defaultPersons || settings.householdSize || 4);
+  const [filterOpen,   setFilterOpen]   = useState(false);
+  const [multiCatData, setMultiCatData] = useState(null);
+
+  const handleIngConfirm = (selectedByRecipe) => {
+    const ids = selectedByRecipe[recipe.id] || [];
+    setFilterOpen(false);
+    const uncat = getUncatIngredients(recipe, ids, cats);
+    if (uncat.length > 0) {
+      setMultiCatData({
+        ingredientIds: ids,
+        uncatItems: uncat.map(i => ({ id:i.id, name:i.name, recipeEmoji:recipe.emoji, recipeName:recipe.name })),
+      });
+    } else {
+      addIngredientsFromRecipe(recipe, persons, ids, {});
+      showSnack(`📋 ${ids.length} ingrédient${ids.length>1?'s':''} ajoutés à la liste`);
+      onClose();
+    }
+  };
+
+  const finish = (ids, catOverrides = {}) => {
+    addIngredientsFromRecipe(recipe, persons, ids, catOverrides);
+    showSnack(`📋 ${ids.length} ingrédient${ids.length>1?'s':''} ajoutés à la liste`);
+    onClose();
+  };
+
+  return (
+    <>
+      {/* Étape 1 : sélection des portions */}
+      {!filterOpen && !multiCatData && (
+        <BottomSheet title={`📋 Ajouter à la liste`} onClose={onClose}>
+          <div style={{ padding:'12px 16px 20px' }}>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:14 }}>
+              {recipe.emoji} {recipe.name}
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:18 }}>
+              <span style={{ fontSize:13, color:C.muted, flex:1 }}>👥 Pour combien de personnes ?</span>
+              <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
+              <span style={{ fontWeight:700, fontSize:18, color:C.accent, minWidth:24, textAlign:'center' }}>{persons}</span>
+              <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
+            </div>
+            <Btn onClick={() => setFilterOpen(true)} variant="primary" style={{ width:'100%', justifyContent:'center' }}>
+              Choisir les ingrédients →
+            </Btn>
+          </div>
+        </BottomSheet>
+      )}
+
+      {/* Étape 2 : sélection des ingrédients */}
+      {filterOpen && (
+        <IngredientFilterModal
+          selections={[{ recipe, persons }]}
+          onConfirm={handleIngConfirm}
+          onSkip={() => { setFilterOpen(false); onClose(); }}
+          onCancel={() => setFilterOpen(false)}
+        />
+      )}
+
+      {/* Étape 3 (optionnelle) : catégorisation des articles inconnus */}
+      {multiCatData && (
+        <MultiCategoryAssignModal
+          uncatItems={multiCatData.uncatItems}
+          onConfirm={catOverrides => finish(multiCatData.ingredientIds, catOverrides)}
+          onCancel={() => { setMultiCatData(null); setFilterOpen(true); }}
+        />
+      )}
+    </>
+  );
+}
+
 function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
   useBackHandler(onClose);
-  const { meals, showSnack, updateRecipe, duplicateRecipe } = useApp();
-  const [checked,     setChecked]     = useState(new Set());
+  const { meals, showSnack, updateRecipe, duplicateRecipe, addIngredientsFromRecipe, settings } = useApp();
+  const [checked,      setChecked]      = useState(new Set());
   const [viewPortions, setViewPortions] = useState(recipe.portions || 4);
-  const [assignOpen,  setAssignOpen]  = useState(false);
+  const [assignOpen,   setAssignOpen]   = useState(false);
+  const [addToList,    setAddToList]    = useState(false);
+  const [cookMode,     setCookMode]     = useState(false);
 
   const base  = recipe.portions || 4;
   const scale = viewPortions / base;
@@ -2211,7 +2289,7 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
         </div>
 
         {/* Chips */}
-        <div style={{ display:'flex', flexWrap:'wrap', gap:7, marginBottom:14, justifyContent:'center' }}>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:7, marginBottom:12, justifyContent:'center' }}>
           {recipe.cookTimeMinutes > 0 && <Chip>⏱ {recipe.cookTimeMinutes} min</Chip>}
           {timesCookedCount > 0 && <Chip color={C.green}>✅ Cuisiné {timesCookedCount}×</Chip>}
           {/* Favori — tap direct sans passer par l'éditeur */}
@@ -2223,6 +2301,26 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
             cursor:'pointer', transition:'all 0.15s',
           }}>{recipe.favorite ? '⭐ Favori' : '☆ Favori'}</button>
           <WeeksBadge recipeId={recipe.id} />
+        </div>
+
+        {/* Boutons d'action rapide */}
+        <div style={{ display:'flex', gap:8, marginBottom:18 }}>
+          {(recipe.ingredients||[]).length > 0 && (
+            <button onClick={() => setAddToList(true)} style={{
+              flex:1, padding:'10px', borderRadius:11,
+              background:C.accentBg, border:`1px solid ${C.accent}44`,
+              color:C.accent, fontSize:12, fontWeight:700, cursor:'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:5,
+            }}>📋 Ajouter à la liste</button>
+          )}
+          {(recipe.steps||[]).length > 0 && (
+            <button onClick={() => setCookMode(true)} style={{
+              flex:1, padding:'10px', borderRadius:11,
+              background:'rgba(92,196,160,0.10)', border:`1px solid ${C.green}44`,
+              color:C.green, fontSize:12, fontWeight:700, cursor:'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:5,
+            }}>🍳 Cuisiner</button>
+          )}
         </div>
 
         {/* Tags */}
@@ -2324,6 +2422,128 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
 
       {assignOpen && (
         <AssignToWeekModal recipe={recipe} viewPortions={viewPortions} onClose={() => setAssignOpen(false)} />
+      )}
+      {addToList && (
+        <AddToListModal recipe={recipe} defaultPersons={viewPortions} onClose={() => setAddToList(false)} />
+      )}
+      {cookMode && (
+        <CookModeOverlay recipe={recipe} onClose={() => setCookMode(false)} />
+      )}
+    </div>
+  );
+}
+
+/** Mode cuisine plein écran — étapes une à une */
+function CookModeOverlay({ recipe, onClose }) {
+  useBackHandler(onClose);
+  const [stepIdx, setStepIdx] = useState(0);
+  const [done,    setDone]    = useState(new Set());
+
+  const steps  = recipe.steps || [];
+  const total  = steps.length;
+  const allDone   = done.size === total;
+  const isDone    = done.has(stepIdx);
+  const progress  = done.size / total;
+
+  const markDone = () => {
+    setDone(s => { const n=new Set(s); n.add(stepIdx); return n; });
+    if (stepIdx < total - 1) setStepIdx(i => i+1);
+  };
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, zIndex:700,
+      background:'linear-gradient(180deg, #0C1A14 0%, #0D1A1F 100%)',
+      display:'flex', flexDirection:'column', animation:'fadeIn 0.18s',
+    }}>
+      {/* Status bar */}
+      <div style={{ background:'transparent', padding:'8px 18px 6px', display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(92,196,160,0.5)', flexShrink:0 }}>
+        <span>9:41</span><span>●●●</span>
+      </div>
+
+      {/* Header */}
+      <div style={{ padding:'8px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+        <button onClick={onClose} style={{ background:'transparent', border:'none', color:'rgba(92,196,160,0.7)', fontSize:12, cursor:'pointer', fontWeight:600 }}>✕ Quitter</button>
+        <span style={{ fontWeight:700, fontSize:13, color:C.green }}>{recipe.emoji} {recipe.name}</span>
+        <span style={{ fontSize:12, color:'rgba(92,196,160,0.5)' }}>{done.size}/{total}</span>
+      </div>
+
+      {/* Barre de progression */}
+      <div style={{ height:3, background:'rgba(92,196,160,0.12)', flexShrink:0 }}>
+        <div style={{ height:'100%', background:C.green, width:`${progress*100}%`, transition:'width 0.4s', borderRadius:2 }} />
+      </div>
+
+      {allDone ? (
+        /* ── Écran de fin ── */
+        <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:28, gap:14 }}>
+          <div style={{ fontSize:64 }}>🎉</div>
+          <div style={{ fontSize:20, fontWeight:800, color:C.green, textAlign:'center' }}>Recette terminée !</div>
+          <div style={{ fontSize:13, color:'rgba(92,196,160,0.6)' }}>Bon appétit 🍽</div>
+          <button onClick={onClose} style={{
+            marginTop:12, background:C.green, border:'none', color:'#fff',
+            borderRadius:13, padding:'12px 28px', fontSize:14, fontWeight:700, cursor:'pointer',
+          }}>← Retour à la fiche</button>
+        </div>
+      ) : (
+        <>
+          {/* Navigation par points */}
+          <div style={{ display:'flex', justifyContent:'center', gap:6, padding:'12px 14px 4px', flexShrink:0 }}>
+            {steps.map((_, i) => (
+              <button key={i} onClick={() => setStepIdx(i)} style={{
+                width: i===stepIdx ? 22 : 8, height:8, borderRadius:4, border:'none',
+                cursor:'pointer', padding:0, transition:'all 0.25s',
+                background: done.has(i) ? C.green : i===stepIdx ? C.accent : 'rgba(255,255,255,0.15)',
+              }} />
+            ))}
+          </div>
+
+          {/* Label étape */}
+          <div style={{ textAlign:'center', padding:'10px 16px 0', flexShrink:0 }}>
+            <span style={{ fontSize:11, color:'rgba(92,196,160,0.55)', fontWeight:600, letterSpacing:'0.1em', textTransform:'uppercase' }}>
+              Étape {stepIdx+1} sur {total}
+            </span>
+          </div>
+
+          {/* Texte de l'étape */}
+          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'0 24px' }}>
+            <p style={{
+              fontSize:19, lineHeight:1.75, color: isDone ? 'rgba(200,230,220,0.45)' : '#D8F0E8',
+              fontWeight:500, textAlign:'center',
+              textDecoration: isDone ? 'line-through' : 'none',
+              transition:'all 0.2s',
+            }}>
+              {steps[stepIdx]}
+            </p>
+          </div>
+
+          {/* Boutons de navigation */}
+          <div style={{ padding:'12px 16px 28px', display:'flex', gap:8, flexShrink:0 }}>
+            <button onClick={() => stepIdx > 0 && setStepIdx(i=>i-1)} disabled={stepIdx===0} style={{
+              flex:1, padding:'13px', borderRadius:13,
+              background:'rgba(92,196,160,0.07)', border:'1px solid rgba(92,196,160,0.18)',
+              color: stepIdx===0 ? 'rgba(92,196,160,0.2)' : C.green,
+              fontSize:18, cursor: stepIdx===0 ? 'default' : 'pointer',
+            }}>←</button>
+
+            <button onClick={markDone} style={{
+              flex:3, padding:'13px', borderRadius:13,
+              background: isDone ? 'rgba(92,196,160,0.12)' : C.green,
+              border: isDone ? `1px solid ${C.green}44` : 'none',
+              color: isDone ? C.green : '#fff',
+              fontSize:14, fontWeight:800, cursor:'pointer', transition:'all 0.15s',
+            }}>
+              {isDone ? (stepIdx < total-1 ? '→ Suivante' : '✓ Terminer') : '✓ Fait'}
+            </button>
+
+            {stepIdx < total-1 && (
+              <button onClick={() => setStepIdx(i=>i+1)} style={{
+                flex:1, padding:'13px', borderRadius:13,
+                background:'rgba(92,196,160,0.07)', border:'1px solid rgba(92,196,160,0.18)',
+                color:C.green, fontSize:18, cursor:'pointer',
+              }}>→</button>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -3767,7 +3987,7 @@ function ShoppingTab() {
 
       {/* ── Articles sans catégorie valide (filet de sécurité) ── */}
       {(() => {
-        const orphans = shopping.filter(s => !cats.find(c => c.id === s.categoryId));
+        const orphans = shopping.filter(s => !cats.find(c => c.id === s.categoryId) && (!shopSearch || s.name.toLowerCase().includes(shopSearch.toLowerCase())));
         if (!orphans.length) return null;
         return (
           <div style={{ marginBottom:7, borderRadius:10, overflow:'hidden', border:`1px dashed ${C.orange}66` }}>
@@ -4641,6 +4861,8 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.9.2</span> — Ajouter à la liste depuis fiche recette · Mode cuisine plein écran<br/>
+            <span style={{ color:C.accent }}>2.9.1</span> — Fix planningTarget mode rolling · Orphelins search · scores custom meals<br/>
             <span style={{ color:C.accent }}>2.9.0</span> — Repas sans recette · Recherche courses · Navigation semaine depuis WeeksBadge<br/>
             <span style={{ color:C.accent }}>2.8.0</span> — Dupliquer → éditeur · Recatégorisation rétroactive · Annuler import · Tags RecipeCard · Tri jamais planifiées · Vider à la sortie mode courses<br/>
             <span style={{ color:C.accent }}>2.7.8</span> — Dupliquer une recette · Partage liste courses enrichi<br/>
