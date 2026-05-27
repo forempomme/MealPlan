@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.9.2"; // v44
+const VERSION = "2.9.4"; // v46
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -143,6 +143,16 @@ function kwVariants(kw) {
  * Normalise un nom d'article pour la comparaison singulier/pluriel
  * (utilisé dans la fusion : "pomme" et "pommes" → même base "pomme").
  */
+/** Détecte une durée en secondes dans le texte d'une étape ("20 min", "1h30", "5 minutes"…) */
+function parseStepDuration(text) {
+  const mMatch = text.match(/(\d+)\s*min(?:utes?)?/i);
+  const hMatch = text.match(/(\d+)\s*h(?:eures?)?/i);
+  let secs = 0;
+  if (hMatch) secs += parseInt(hMatch[1]) * 3600;
+  if (mMatch) secs += parseInt(mMatch[1]) * 60;
+  return secs > 0 ? secs : null;
+}
+
 function stemFrName(name) {
   // Normalise mot par mot, supprime les 's' finaux sauf pour les mots très courts
   return name.toLowerCase().trim()
@@ -2227,12 +2237,39 @@ function AddToListModal({ recipe, defaultPersons, onClose }) {
 
 function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
   useBackHandler(onClose);
-  const { meals, showSnack, updateRecipe, duplicateRecipe, addIngredientsFromRecipe, settings } = useApp();
+  const { meals, shopping, cats, showSnack, updateRecipe, duplicateRecipe, addIngredientsFromRecipe, settings } = useApp();
   const [checked,      setChecked]      = useState(new Set());
   const [viewPortions, setViewPortions] = useState(recipe.portions || 4);
   const [assignOpen,   setAssignOpen]   = useState(false);
   const [addToList,    setAddToList]    = useState(false);
+  const [badgeOpen,    setBadgeOpen]    = useState(false);
   const [cookMode,     setCookMode]     = useState(false);
+
+  // Ingrédients manquants dans la liste de courses
+  const shoppingNames = useMemo(() => new Set(
+    shopping.filter(s => !s.checked).map(s => stemFrName(s.name.toLowerCase()))
+  ), [shopping]);
+  const missingIngredients = useMemo(() =>
+    (recipe.ingredients||[]).filter(i => !shoppingNames.has(stemFrName(i.name.toLowerCase())))
+  , [recipe.ingredients, shoppingNames]);
+  const presentIngredients = useMemo(() =>
+    (recipe.ingredients||[]).filter(i =>  shoppingNames.has(stemFrName(i.name.toLowerCase())))
+  , [recipe.ingredients, shoppingNames]);
+
+  // Ajout direct des ingrédients manquants (sans passer par la modale si tout est catégorisé)
+  const handleAddMissing = () => {
+    const ids = missingIngredients.map(i => i.id);
+    if (!ids.length) return;
+    const uncat = getUncatIngredients(recipe, ids, cats);
+    if (uncat.length > 0) {
+      setBadgeOpen(false);
+      setAddToList(true);
+    } else {
+      addIngredientsFromRecipe(recipe, viewPortions, ids, {});
+      showSnack(`📋 ${ids.length} ingrédient${ids.length>1?'s':''} ajouté${ids.length>1?'s':''}`);
+      setBadgeOpen(false);
+    }
+  };
 
   const base  = recipe.portions || 4;
   const scale = viewPortions / base;
@@ -2304,14 +2341,23 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
         </div>
 
         {/* Boutons d'action rapide */}
-        <div style={{ display:'flex', gap:8, marginBottom:18 }}>
+        <div style={{ display:'flex', gap:8, marginBottom: badgeOpen ? 8 : 18 }}>
           {(recipe.ingredients||[]).length > 0 && (
-            <button onClick={() => setAddToList(true)} style={{
-              flex:1, padding:'10px', borderRadius:11,
+            <button onClick={() => setBadgeOpen(v => !v)} style={{
+              flex:1, padding:'10px 8px', borderRadius:11,
               background:C.accentBg, border:`1px solid ${C.accent}44`,
               color:C.accent, fontSize:12, fontWeight:700, cursor:'pointer',
               display:'flex', alignItems:'center', justifyContent:'center', gap:5,
-            }}>📋 Ajouter à la liste</button>
+            }}>
+              📋 Ajouter à la liste
+              {missingIngredients.length > 0 && (
+                <span style={{
+                  background:C.accentDk, color:'#fff',
+                  borderRadius:12, fontSize:10, fontWeight:800,
+                  padding:'1px 6px', minWidth:18, textAlign:'center', flexShrink:0,
+                }}>{missingIngredients.length}</span>
+              )}
+            </button>
           )}
           {(recipe.steps||[]).length > 0 && (
             <button onClick={() => setCookMode(true)} style={{
@@ -2322,6 +2368,57 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
             }}>🍳 Cuisiner</button>
           )}
         </div>
+
+        {/* Accordéon ingrédients manquants */}
+        {badgeOpen && (recipe.ingredients||[]).length > 0 && (
+          <div style={{
+            background:C.card, border:`1px solid ${C.border}`,
+            borderRadius:12, padding:'12px 14px', marginBottom:18,
+          }}>
+            {missingIngredients.length > 0 && (
+              <>
+                <div style={{ fontSize:11, color:C.orange, fontWeight:700, marginBottom:8 }}>
+                  🛒 {missingIngredients.length} ingrédient{missingIngredients.length>1?'s':''} manquant{missingIngredients.length>1?'s':''}
+                </div>
+                {missingIngredients.map(i => {
+                  const q = fmtQty(i.qty);
+                  return (
+                    <div key={i.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 0', borderBottom:`1px solid ${C.border}` }}>
+                      <span style={{ width:16, height:16, borderRadius:4, background:C.orangeBg, border:`1px solid ${C.orange}44`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:C.orange, flexShrink:0 }}>✕</span>
+                      <span style={{ flex:1, fontSize:13, color:C.text }}>{i.name}</span>
+                      {q > 0 && <span style={{ fontSize:11, color:C.muted }}>{q}{i.unit?' '+i.unit:''}</span>}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+            {presentIngredients.length > 0 && (
+              <>
+                <div style={{ fontSize:11, color:C.green, fontWeight:700, margin:`${missingIngredients.length>0?8:0}px 0 8px` }}>
+                  ✅ {presentIngredients.length} déjà dans la liste
+                </div>
+                {presentIngredients.map(i => (
+                  <div key={i.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'4px 0', opacity:0.55 }}>
+                    <span style={{ width:16, height:16, borderRadius:4, background:C.greenBg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:C.green, flexShrink:0 }}>✓</span>
+                    <span style={{ flex:1, fontSize:13, color:C.muted, textDecoration:'line-through' }}>{i.name}</span>
+                  </div>
+                ))}
+              </>
+            )}
+            <div style={{ display:'flex', gap:8, marginTop:12 }}>
+              {missingIngredients.length > 0 && (
+                <button onClick={handleAddMissing} style={{
+                  flex:2, padding:'10px', background:C.accentDk, border:'none',
+                  color:'#fff', borderRadius:10, fontSize:12, fontWeight:700, cursor:'pointer',
+                }}>Ajouter les {missingIngredients.length} manquants →</button>
+              )}
+              <button onClick={() => { setBadgeOpen(false); setAddToList(true); }} style={{
+                flex:1, padding:'10px', background:C.border, border:'none',
+                color:C.muted, borderRadius:10, fontSize:12, cursor:'pointer',
+              }}>Tout choisir</button>
+            </div>
+          </div>
+        )}
 
         {/* Tags */}
         {(recipe.tags||[]).length > 0 && (
@@ -2359,10 +2456,14 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
         {/* Ingrédients (recalculés) */}
         <SecTitle>Ingrédients</SecTitle>
         {(recipe.ingredients||[]).map(ing => {
-          const q = fmtQty(ing.qty);
+          const q      = fmtQty(ing.qty);
+          const inList = shoppingNames.has(stemFrName(ing.name.toLowerCase()));
           return (
-            <div key={ing.id} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${C.border}` }}>
-              <span style={{ color:C.text, fontSize:13 }}>{ing.name}</span>
+            <div key={ing.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:`1px solid ${C.border}` }}>
+              <span style={{ color: inList ? C.muted : C.text, fontSize:13, display:'flex', gap:6, alignItems:'center' }}>
+                {shopping.length > 0 && <span style={{ fontSize:11, opacity:0.7 }}>{inList ? '✅' : '⬜'}</span>}
+                <span style={{ textDecoration: inList ? 'line-through' : 'none' }}>{ing.name}</span>
+              </span>
               {q > 0 && (
                 <span style={{
                   fontSize:13, fontWeight: scale!==1 ? 600 : 400,
@@ -2438,12 +2539,57 @@ function CookModeOverlay({ recipe, onClose }) {
   useBackHandler(onClose);
   const [stepIdx, setStepIdx] = useState(0);
   const [done,    setDone]    = useState(new Set());
+  const [timerSec,   setTimerSec]   = useState(null);
+  const [timerTotal, setTimerTotal] = useState(null);
+  const [timerOn,    setTimerOn]    = useState(false);
+  const timerRef = useRef(null);
 
   const steps  = recipe.steps || [];
   const total  = steps.length;
   const allDone   = done.size === total;
   const isDone    = done.has(stepIdx);
   const progress  = done.size / total;
+  const stepDur   = parseStepDuration(steps[stepIdx] || '');
+
+  // Reset timer quand on change d'étape
+  useEffect(() => {
+    clearTimeout(timerRef.current);
+    setTimerSec(null); setTimerTotal(null); setTimerOn(false);
+  }, [stepIdx]);
+
+  // Tick timer
+  useEffect(() => {
+    if (!timerOn) return;
+    if (timerSec > 0) {
+      timerRef.current = setTimeout(() => setTimerSec(s => s-1), 1000);
+    } else {
+      setTimerOn(false);
+    }
+    return () => clearTimeout(timerRef.current);
+  }, [timerOn, timerSec]);
+
+  const startTimer = () => {
+    if (!stepDur) return;
+    setTimerSec(stepDur); setTimerTotal(stepDur); setTimerOn(true);
+  };
+  const toggleTimer = () => {
+    if (timerSec === null) { startTimer(); return; }
+    setTimerOn(v => !v);
+  };
+  const resetTimer = () => { clearTimeout(timerRef.current); setTimerSec(null); setTimerTotal(null); setTimerOn(false); };
+
+  const fmtTimer = s => {
+    if (s === null) {
+      const m = Math.floor(stepDur/60), sec = stepDur%60;
+      return `${m}:${String(sec).padStart(2,'0')}`;
+    }
+    const m = Math.floor(s/60), sec = s%60;
+    return `${m}:${String(sec).padStart(2,'0')}`;
+  };
+
+  const timerDone  = timerSec === 0;
+  const timerProg  = timerSec !== null && timerTotal > 0 ? 1 - timerSec/timerTotal : 0;
+  const timerColor = timerDone ? C.green : timerOn ? C.orange : C.accent;
 
   const markDone = () => {
     setDone(s => { const n=new Set(s); n.add(stepIdx); return n; });
@@ -2504,20 +2650,55 @@ function CookModeOverlay({ recipe, onClose }) {
             </span>
           </div>
 
-          {/* Texte de l'étape */}
-          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'0 24px' }}>
+          {/* Texte de l'étape — tap pour marquer comme fait */}
+          <div onClick={markDone} style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'0 24px', cursor:'pointer' }}>
             <p style={{
               fontSize:19, lineHeight:1.75, color: isDone ? 'rgba(200,230,220,0.45)' : '#D8F0E8',
               fontWeight:500, textAlign:'center',
               textDecoration: isDone ? 'line-through' : 'none',
-              transition:'all 0.2s',
+              transition:'all 0.2s', userSelect:'none',
             }}>
               {steps[stepIdx]}
             </p>
           </div>
 
+          {/* ── Timer (si durée détectée dans l'étape) ── */}
+          {stepDur && (
+            <div style={{ margin:'0 16px 8px', borderRadius:14, overflow:'hidden', background:'rgba(0,0,0,0.25)', border:`1px solid ${timerColor}33`, flexShrink:0 }}>
+              {timerSec !== null && (
+                <div style={{ height:3, background:'rgba(255,255,255,0.06)' }}>
+                  <div style={{ height:'100%', background:timerColor, width:`${timerProg*100}%`, transition:'width 1s linear', borderRadius:2 }} />
+                </div>
+              )}
+              <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px' }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:26, fontWeight:800, color:timerColor, letterSpacing:'-0.02em', lineHeight:1 }}>
+                    {timerDone ? '✓ Terminé !' : fmtTimer(timerSec)}
+                  </div>
+                  <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)', marginTop:2 }}>
+                    {timerSec === null ? `⏱ ${Math.round(stepDur/60)} min suggérées` : timerOn ? 'En cours…' : timerDone ? '' : 'En pause'}
+                  </div>
+                </div>
+                <div style={{ display:'flex', gap:7 }}>
+                  {timerSec !== null && !timerDone && (
+                    <button onClick={resetTimer} style={{ background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.4)', borderRadius:9, width:36, height:36, cursor:'pointer', fontSize:14 }}>↺</button>
+                  )}
+                  {!timerDone && (
+                    <button onClick={toggleTimer} style={{
+                      background: timerSec === null ? timerColor : timerOn ? `${C.orange}33` : `${timerColor}33`,
+                      border:`1px solid ${timerColor}55`, color: timerSec === null ? '#fff' : timerColor,
+                      borderRadius:9, padding:'0 14px', height:36, cursor:'pointer', fontSize:12, fontWeight:700,
+                    }}>
+                      {timerSec === null ? '▶ Démarrer' : timerOn ? '⏸' : '▶'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Boutons de navigation */}
-          <div style={{ padding:'12px 16px 28px', display:'flex', gap:8, flexShrink:0 }}>
+          <div style={{ padding:'4px 16px 28px', display:'flex', gap:8, flexShrink:0 }}>
             <button onClick={() => stepIdx > 0 && setStepIdx(i=>i-1)} disabled={stepIdx===0} style={{
               flex:1, padding:'13px', borderRadius:13,
               background:'rgba(92,196,160,0.07)', border:'1px solid rgba(92,196,160,0.18)',
@@ -3503,7 +3684,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
       <BottomSheet title="⚠️ Modifications non sauvegardées" onClose={() => setCloseWarning(false)}>
         <div style={{ padding:'10px 16px 24px' }}>
           <p style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.5 }}>
-            Tu as des modifications en cours.{'\n'}Quitter sans sauvegarder ?
+            Tu as des modifications en cours.<br/>Quitter sans sauvegarder ?
           </p>
           <div style={{ display:'flex', gap:8 }}>
             <Btn onClick={() => setCloseWarning(false)} style={{ flex:1, justifyContent:'center' }}>
@@ -4861,6 +5042,8 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.9.4</span> — Badge ingrédients manquants · Timer mode cuisine<br/>
+            <span style={{ color:C.accent }}>2.9.3</span> — Fix saut de ligne avertissement éditeur · Tap zone étape mode cuisine<br/>
             <span style={{ color:C.accent }}>2.9.2</span> — Ajouter à la liste depuis fiche recette · Mode cuisine plein écran<br/>
             <span style={{ color:C.accent }}>2.9.1</span> — Fix planningTarget mode rolling · Orphelins search · scores custom meals<br/>
             <span style={{ color:C.accent }}>2.9.0</span> — Repas sans recette · Recherche courses · Navigation semaine depuis WeeksBadge<br/>
