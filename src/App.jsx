@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.9.4"; // v46
+const VERSION = "2.9.5"; // v47
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -251,9 +251,6 @@ function mergeOrAdd(list, newItem) {
 // ══════════════════════════════════════════════════════
 
 
-const INIT_RECIPES = [];
-const INIT_MEALS   = [];
-
 // ══════════════════════════════════════════════════════
 //  PERSISTANCE — localStorage + fallback mémoire
 //  Fonctionne en WebView Android ET dans un artefact Claude
@@ -283,8 +280,8 @@ const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
 
 function AppProvider({ children }) {
-  const [recipes,  setRecipes]  = useState(() => loadFromStorage('mp_recipes',  INIT_RECIPES));
-  const [meals,    setMeals]    = useState(() => loadFromStorage('mp_meals',     INIT_MEALS));
+  const [recipes,  setRecipes]  = useState(() => loadFromStorage('mp_recipes',  []));
+  const [meals,    setMeals]    = useState(() => loadFromStorage('mp_meals',     []));
   const [shopping, setShopping] = useState(() => loadFromStorage('mp_shopping',  []));
   const [cats,     setCats]     = useState(() => loadFromStorage('mp_cats',      DEFAULT_CATS));
   const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4, householdSize: 6 }));
@@ -1284,8 +1281,7 @@ function PlanningTab() {
       {viewRecipe && (
         <RecipeDetail recipe={recipes.find(r => r.id === viewRecipe.id) || viewRecipe}
           onClose={() => setViewRecipe(null)}
-          onEdit={null}
-          onDelete={null}
+          onEdit={null} onDelete={null} onDuplicate={null}
         />
       )}
     </div>
@@ -3165,7 +3161,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
   const snapshot = () => JSON.stringify({
     name: form.name, emoji: form.emoji, portions: form.portions,
     cookTimeMinutes: form.cookTimeMinutes, rating: form.rating,
-    tagsStr: form.tagsStr, note: form.note,
+    tagsStr: form.tagsStr, note: form.note, url: form.url,
     ingredients: form.ingredients.filter(i => i.name.trim()),
     steps: form.steps.filter(s => s.trim()),
   });
@@ -3361,7 +3357,6 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
       setImportDone(true);
       setImportStep('');
     } catch (e) {
-      console.error(e);
       const isBadJson = e.message?.includes('JSON') || e.message?.includes('parse') || e instanceof SyntaxError;
       setImportError(isBadJson
         ? 'Données structurées introuvables. Essaie le mode "Coller le texte".'
@@ -4808,7 +4803,7 @@ function StatsTab() {
       {viewFromStats && (
         <RecipeDetail recipe={recipes.find(r => r.id === viewFromStats.id) || viewFromStats}
           onClose={() => setViewFromStats(null)}
-          onEdit={null} onDelete={null}
+          onEdit={null} onDelete={null} onDuplicate={null}
         />
       )}
 
@@ -5042,6 +5037,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.9.5</span> — url dans snapshot · suppression console.error · INIT_ dead code · onDuplicate explicite<br/>
             <span style={{ color:C.accent }}>2.9.4</span> — Badge ingrédients manquants · Timer mode cuisine<br/>
             <span style={{ color:C.accent }}>2.9.3</span> — Fix saut de ligne avertissement éditeur · Tap zone étape mode cuisine<br/>
             <span style={{ color:C.accent }}>2.9.2</span> — Ajouter à la liste depuis fiche recette · Mode cuisine plein écran<br/>
