@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.9.5"; // v47
+const VERSION = "2.9.6"; // v48
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -502,6 +502,15 @@ function AppProvider({ children }) {
     setShopping([]);
     showSnack(`Liste vidée (${toDelete.length} article${toDelete.length>1?'s':''})`, () => setShopping(toDelete));
   };
+  const deleteShoppingItemsByIds = (ids) => {
+    const removed = shopping.filter(s => ids.includes(s.id));
+    if (!removed.length) return;
+    setShopping(p => p.filter(s => !ids.includes(s.id)));
+    showSnack(
+      `${removed.length} ingrédient${removed.length>1?'s':''} retirés de la liste`,
+      () => setShopping(p => [...p, ...removed])
+    );
+  };
 
   const updateShoppingItem = (id, patch) =>
     setShopping(p => p.map(s => s.id === id ? { ...s, ...patch } : s));
@@ -563,7 +572,7 @@ function AppProvider({ children }) {
       recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
       addRecipe, updateRecipe, duplicateRecipe, deleteRecipe,
       addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek,
-      addShoppingItem, deleteShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
+      addShoppingItem, deleteShoppingItem, deleteShoppingItemsByIds, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
       reorderItemsInCat, addCat, deleteCat, updateCat, reorderCats, updSettings, importAllData,
       planningTarget, setPlanningTarget,
     }}>
@@ -2233,7 +2242,7 @@ function AddToListModal({ recipe, defaultPersons, onClose }) {
 
 function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
   useBackHandler(onClose);
-  const { meals, shopping, cats, showSnack, updateRecipe, duplicateRecipe, addIngredientsFromRecipe, settings } = useApp();
+  const { meals, shopping, cats, showSnack, updateRecipe, duplicateRecipe, addIngredientsFromRecipe, deleteShoppingItemsByIds, settings } = useApp();
   const [checked,      setChecked]      = useState(new Set());
   const [viewPortions, setViewPortions] = useState(recipe.portions || 4);
   const [assignOpen,   setAssignOpen]   = useState(false);
@@ -2265,6 +2274,17 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
       showSnack(`📋 ${ids.length} ingrédient${ids.length>1?'s':''} ajouté${ids.length>1?'s':''}`);
       setBadgeOpen(false);
     }
+  };
+
+  // Suppression des ingrédients déjà présents dans la liste
+  const handleRemovePresent = () => {
+    const stemmed = presentIngredients.map(i => stemFrName(i.name.toLowerCase()));
+    const ids = shopping
+      .filter(s => !s.checked && stemmed.includes(stemFrName(s.name.toLowerCase())))
+      .map(s => s.id);
+    if (!ids.length) return;
+    deleteShoppingItemsByIds(ids);
+    setBadgeOpen(false);
   };
 
   const base  = recipe.portions || 4;
@@ -2407,6 +2427,13 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
                   flex:2, padding:'10px', background:C.accentDk, border:'none',
                   color:'#fff', borderRadius:10, fontSize:12, fontWeight:700, cursor:'pointer',
                 }}>Ajouter les {missingIngredients.length} manquants →</button>
+              )}
+              {presentIngredients.length > 0 && (
+                <button onClick={handleRemovePresent} style={{
+                  flex:2, padding:'10px', background:C.redBg,
+                  border:`1px solid ${C.red}33`, color:C.red,
+                  borderRadius:10, fontSize:12, fontWeight:700, cursor:'pointer',
+                }}>🗑 Retirer les {presentIngredients.length}</button>
               )}
               <button onClick={() => { setBadgeOpen(false); setAddToList(true); }} style={{
                 flex:1, padding:'10px', background:C.border, border:'none',
@@ -5037,6 +5064,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>2.9.6</span> — Retirer ingrédients de la liste depuis fiche recette<br/>
             <span style={{ color:C.accent }}>2.9.5</span> — url dans snapshot · suppression console.error · INIT_ dead code · onDuplicate explicite<br/>
             <span style={{ color:C.accent }}>2.9.4</span> — Badge ingrédients manquants · Timer mode cuisine<br/>
             <span style={{ color:C.accent }}>2.9.3</span> — Fix saut de ligne avertissement éditeur · Tap zone étape mode cuisine<br/>
