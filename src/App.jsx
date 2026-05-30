@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "2.9.6"; // v48
+const VERSION = "3.0.1"; // v50
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -412,6 +412,8 @@ function AppProvider({ children }) {
     const newPersons = Math.max(1, oldPersons + delta);
     if (newPersons === oldPersons) return;
     setMeals(p => p.map(m => m.id === id ? { ...m, persons: newPersons } : m));
+    // Repas personnalisés (recipeId=null) n'ont pas d'articles de courses liés
+    if (!meal.recipeId) return;
     const ratio = newPersons / oldPersons;
     // fromMealId (nouveau) prioritaire sur fromRecipeId (legacy) pour éviter le rescaling croisé
     const linked = s => s.fromMealId ? s.fromMealId === id : s.fromRecipeId === meal.recipeId;
@@ -1804,7 +1806,7 @@ function RecipesTab() {
   // Filtrage : nom OU ingrédient
   const filtered = useMemo(() => recipes.filter(r => {
     if (filterFav && !r.favorite) return false;
-    if (filterTags.length && !(r.tags||[]).some(t => filterTags.includes(t))) return false;
+    if (filterTags.length && !filterTags.every(t => (r.tags||[]).includes(t))) return false;
     if (search) {
       const q = search.toLowerCase();
       const inName = r.name.toLowerCase().includes(q);
@@ -1973,6 +1975,11 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
               </span>
             )}
           </SecTitle>
+          {filterTags.length > 1 && (
+            <div style={{ fontSize:11, color:C.muted, marginBottom:8 }}>
+              Affiche les recettes qui ont <strong style={{ color:C.accent }}>tous</strong> les tags sélectionnés.
+            </div>
+          )}
           <input
             value={tagSearch}
             onChange={e => setTagSearch(e.target.value)}
@@ -2551,21 +2558,24 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
         <AddToListModal recipe={recipe} defaultPersons={viewPortions} onClose={() => setAddToList(false)} />
       )}
       {cookMode && (
-        <CookModeOverlay recipe={recipe} onClose={() => setCookMode(false)} />
+        <CookModeOverlay recipe={recipe} portions={viewPortions} onClose={() => setCookMode(false)} />
       )}
     </div>
   );
 }
 
 /** Mode cuisine plein écran — étapes une à une */
-function CookModeOverlay({ recipe, onClose }) {
+function CookModeOverlay({ recipe, portions, onClose }) {
   useBackHandler(onClose);
   const [stepIdx, setStepIdx] = useState(0);
   const [done,    setDone]    = useState(new Set());
   const [timerSec,   setTimerSec]   = useState(null);
   const [timerTotal, setTimerTotal] = useState(null);
   const [timerOn,    setTimerOn]    = useState(false);
+  const [ingOpen,    setIngOpen]    = useState(false);
   const timerRef = useRef(null);
+
+  const scale = (portions || recipe.portions || 4) / (recipe.portions || 4);
 
   const steps  = recipe.steps || [];
   const total  = steps.length;
@@ -2634,7 +2644,12 @@ function CookModeOverlay({ recipe, onClose }) {
       <div style={{ padding:'8px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
         <button onClick={onClose} style={{ background:'transparent', border:'none', color:'rgba(92,196,160,0.7)', fontSize:12, cursor:'pointer', fontWeight:600 }}>✕ Quitter</button>
         <span style={{ fontWeight:700, fontSize:13, color:C.green }}>{recipe.emoji} {recipe.name}</span>
-        <span style={{ fontSize:12, color:'rgba(92,196,160,0.5)' }}>{done.size}/{total}</span>
+        <button onClick={() => setIngOpen(v => !v)} style={{
+          background: ingOpen ? 'rgba(92,196,160,0.2)' : 'rgba(92,196,160,0.08)',
+          border:`1px solid rgba(92,196,160,${ingOpen ? '0.4' : '0.18'})`,
+          color:C.green, borderRadius:8, padding:'4px 9px',
+          fontSize:11, fontWeight:600, cursor:'pointer',
+        }}>📋 {done.size}/{total}</button>
       </div>
 
       {/* Barre de progression */}
@@ -2748,6 +2763,47 @@ function CookModeOverlay({ recipe, onClose }) {
             )}
           </div>
         </>
+      )}
+      {/* ── Overlay ingrédients ── */}
+      {ingOpen && (recipe.ingredients||[]).length > 0 && (
+        <div onClick={() => setIngOpen(false)} style={{
+          position:'absolute', inset:0, zIndex:10,
+          background:'rgba(0,0,0,0.6)',
+          display:'flex', alignItems:'flex-end',
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            width:'100%', background:'#0F1F18',
+            border:'1px solid rgba(92,196,160,0.2)',
+            borderRadius:'20px 20px 0 0',
+            padding:'16px 16px 28px', maxHeight:'60vh', overflowY:'auto',
+          }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+              <span style={{ fontWeight:700, fontSize:14, color:C.green }}>
+                📋 Ingrédients
+                {portions && portions !== recipe.portions && (
+                  <span style={{ fontSize:11, color:'rgba(92,196,160,0.5)', marginLeft:6 }}>({portions} pers.)</span>
+                )}
+              </span>
+              <button onClick={() => setIngOpen(false)} style={{ background:'transparent', border:'none', color:'rgba(92,196,160,0.5)', fontSize:18, cursor:'pointer' }}>✕</button>
+            </div>
+            {(recipe.ingredients||[]).map((ing, i) => {
+              const q = ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0;
+              return (
+                <div key={ing.id || i} style={{
+                  display:'flex', justifyContent:'space-between', alignItems:'center',
+                  padding:'8px 0', borderBottom:'1px solid rgba(92,196,160,0.1)',
+                }}>
+                  <span style={{ fontSize:14, color:'#C8E8D8' }}>{ing.name}</span>
+                  {q > 0 && (
+                    <span style={{ fontSize:13, color:'rgba(92,196,160,0.7)', fontWeight:600 }}>
+                      {q}{ing.unit ? '\u202f'+ing.unit : ''}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -5064,6 +5120,8 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>3.0.1</span> — Fix updateMealPersons repas personnalisés (null recipeId)<br/>
+            <span style={{ color:C.accent }}>3.0.0</span> — Ingrédients dans mode cuisine · Filtre tags AND<br/>
             <span style={{ color:C.accent }}>2.9.6</span> — Retirer ingrédients de la liste depuis fiche recette<br/>
             <span style={{ color:C.accent }}>2.9.5</span> — url dans snapshot · suppression console.error · INIT_ dead code · onDuplicate explicite<br/>
             <span style={{ color:C.accent }}>2.9.4</span> — Badge ingrédients manquants · Timer mode cuisine<br/>
