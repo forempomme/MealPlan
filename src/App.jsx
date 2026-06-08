@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.0.1"; // v50
+const VERSION = "3.0.2"; // v51
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -4508,7 +4508,7 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
       style={{ marginBottom:7, borderRadius:10, overflow:'hidden', ...borderStyle, transition:'border 0.1s' }}
     >
       {/* En-tête */}
-      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 12px', background:C.card, userSelect:'none' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 12px', background:'#1A2636', borderLeft:`3px solid ${C.accent}`, userSelect:'none' }}>
         <span style={{ color:C.muted, fontSize:14, cursor:'grab', paddingRight:2 }}>≡</span>
         {/* Tout supprimer la catégorie */}
         <button
@@ -4522,7 +4522,7 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
           }}>✓</button>
         <span onClick={() => setOpen(o=>!o)} style={{ flex:1, display:'flex', alignItems:'center', gap:6, cursor:'pointer' }}>
           <span style={{ fontSize:17 }}>{cat.emoji}</span>
-          <span style={{ fontWeight:600, fontSize:14, color:C.text }}>{cat.name}</span>
+          <span style={{ fontWeight:700, fontSize:14, color:C.accent }}>{cat.name}</span>
           <span style={{
             fontSize:10, fontWeight:700, color:'#fff',
             background:C.accent, padding:'1px 7px', borderRadius:20, marginLeft:'auto',
@@ -5120,6 +5120,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>3.0.2</span> — En-têtes catégories courses : fond accentué + bordure gauche<br/>
             <span style={{ color:C.accent }}>3.0.1</span> — Fix updateMealPersons repas personnalisés (null recipeId)<br/>
             <span style={{ color:C.accent }}>3.0.0</span> — Ingrédients dans mode cuisine · Filtre tags AND<br/>
             <span style={{ color:C.accent }}>2.9.6</span> — Retirer ingrédients de la liste depuis fiche recette<br/>
