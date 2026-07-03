@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.0.2"; // v51
+const VERSION = "3.0.3"; // v52
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -60,6 +60,8 @@ const C = {
   orangeBg: 'rgba(232,168,123,0.12)',
   red:      '#E87878',
   redBg:    'rgba(232,120,120,0.10)',
+  sweet:    '#C87BD8',
+  sweetBg:  'rgba(200,123,216,0.10)',
   planBg:   '#151B28',
   planBdr:  '#243048',
   cookedBg: 'rgba(92,196,160,0.14)',
@@ -1786,6 +1788,7 @@ function RecipesTab() {
   const [filterFav,   setFilterFav]   = useState(false);
   const [filterTags,  setFilterTags]  = useState([]);
   const [sort,        setSort]        = useState('newest');
+  const [typeFilter,  setTypeFilter]  = useState('all'); // 'all' | 'savory' | 'sweet'
   const [filterOpen,  setFilterOpen]  = useState(false);
   const [detailId,    setDetailId]    = useState(null);
   const [editRec,     setEditRec]     = useState(null);
@@ -1807,6 +1810,7 @@ function RecipesTab() {
   const filtered = useMemo(() => recipes.filter(r => {
     if (filterFav && !r.favorite) return false;
     if (filterTags.length && !filterTags.every(t => (r.tags||[]).includes(t))) return false;
+    if (typeFilter !== 'all' && r.type !== typeFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       const inName = r.name.toLowerCase().includes(q);
@@ -1814,7 +1818,7 @@ function RecipesTab() {
       if (!inName && !inIng) return false;
     }
     return true;
-  }), [recipes, filterFav, filterTags, search]);
+  }), [recipes, filterFav, filterTags, search, typeFilter]);
 
   // Tri
   const sorted = useMemo(() => {
@@ -1832,7 +1836,7 @@ function RecipesTab() {
 
   const blankRecipe = () => ({
     name:'', emoji:'🍽️', portions:4, url:'', tags:[], favorite:false,
-    rating:0, cookTimeMinutes:0, note:'',
+    rating:0, cookTimeMinutes:0, note:'', type: null,
     ingredients:[{ id:genId(), name:'', qty:'', unit:'' }],
     steps:[''],
   });
@@ -1863,6 +1867,42 @@ function RecipesTab() {
         </button>
       </div>
 
+      {/* ── Onglets Toutes / Salé / Sucré ── */}
+      <div style={{ display:'flex', background:C.border, borderRadius:9, padding:3, gap:2, marginBottom:10 }}>
+        {[
+          { v:'all',    l:'Toutes' },
+          { v:'savory', l:'🧂 Salé' },
+          { v:'sweet',  l:'🍰 Sucré' },
+        ].map(({ v, l }) => {
+          const isSweet  = v === 'sweet';
+          const isSavory = v === 'savory';
+          const active   = typeFilter === v;
+          return (
+            <button key={v} onClick={() => setTypeFilter(v)} style={{
+              flex:1,
+              background: active ? (isSweet ? C.sweetBg : isSavory ? C.accentBg : C.card) : 'transparent',
+              color:      active ? (isSweet ? C.sweet   : isSavory ? C.accent   : C.text)  : C.muted,
+              border:     active ? `1px solid ${isSweet ? C.sweet+'44' : isSavory ? C.accent+'44' : C.border}` : '1px solid transparent',
+              borderRadius:7, padding:'6px 4px', fontSize:11,
+              fontWeight: active ? 700 : 400, cursor:'pointer',
+            }}>{l}</button>
+          );
+        })}
+      </div>
+
+      {/* Banner recettes non classées */}
+      {typeFilter === 'all' && (() => {
+        const n = recipes.filter(r => !r.type).length;
+        return n > 0 ? (
+          <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', marginBottom:10, background:C.orangeBg, border:`1px solid ${C.orange}33`, borderRadius:9 }}>
+            <span style={{ fontSize:12 }}>🧂🍰</span>
+            <span style={{ fontSize:11, color:C.orange, flex:1 }}>
+              <strong>{n}</strong> recette{n>1?'s':''} non classée{n>1?'s':''} — utilise les boutons en bas de chaque carte
+            </span>
+          </div>
+        ) : null;
+      })()}
+
       <Btn onClick={() => setEditRec(blankRecipe())} variant="primary" small style={{ marginBottom:12 }}>
         + Nouvelle recette
       </Btn>
@@ -1873,6 +1913,7 @@ function RecipesTab() {
           <RecipeCard key={r.id} recipe={r}
             onClick={() => setDetailId(r.id)}
             onDelete={() => deleteRecipe(r.id)}
+            onTypeChange={type => updateRecipe({ ...r, type: r.type === type ? null : type })}
           />
         ))}
       </div>
@@ -2115,7 +2156,7 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
   );
 }
 
-function RecipeCard({ recipe, onClick, onDelete }) {
+function RecipeCard({ recipe, onClick, onDelete, onTypeChange }) {
   const { meals } = useApp();
   const mealCount = meals.filter(m => m.recipeId === recipe.id).length;
 
@@ -2169,6 +2210,24 @@ function RecipeCard({ recipe, onClick, onDelete }) {
             cursor:'pointer', fontSize:11,
           }}>🗑</button>
         </div>
+      </div>
+
+      {/* Toggle Salé / Sucré */}
+      <div style={{ display:'flex', gap:4, marginTop:8, borderTop:`1px solid ${C.border}`, paddingTop:7 }}>
+        <button onClick={e => { e.stopPropagation(); onTypeChange?.('savory'); }} style={{
+          flex:1, padding:'4px 0', borderRadius:7, fontSize:10, fontWeight:600, cursor:'pointer',
+          background: recipe.type==='savory' ? C.accentBg : 'transparent',
+          border:`1px solid ${recipe.type==='savory' ? C.accent+'55' : C.border}`,
+          color: recipe.type==='savory' ? C.accent : C.muted,
+          transition:'all 0.12s',
+        }}>🧂 Salé</button>
+        <button onClick={e => { e.stopPropagation(); onTypeChange?.('sweet'); }} style={{
+          flex:1, padding:'4px 0', borderRadius:7, fontSize:10, fontWeight:600, cursor:'pointer',
+          background: recipe.type==='sweet' ? C.sweetBg : 'transparent',
+          border:`1px solid ${recipe.type==='sweet' ? C.sweet+'55' : C.border}`,
+          color: recipe.type==='sweet' ? C.sweet : C.muted,
+          transition:'all 0.12s',
+        }}>🍰 Sucré</button>
       </div>
     </div>
   );
@@ -3245,6 +3304,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     name: form.name, emoji: form.emoji, portions: form.portions,
     cookTimeMinutes: form.cookTimeMinutes, rating: form.rating,
     tagsStr: form.tagsStr, note: form.note, url: form.url,
+    type: form.type || null,
     ingredients: form.ingredients.filter(i => i.name.trim()),
     steps: form.steps.filter(s => s.trim()),
   });
@@ -3700,6 +3760,25 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
         </div>
 
         <div style={{ marginBottom:16 }}>
+          {/* ── Type : Salé / Sucré ── */}
+          <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:8 }}>Type de recette</label>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={() => set('type', form.type==='savory' ? null : 'savory')} style={{
+                flex:1, padding:'9px', borderRadius:9, cursor:'pointer', fontWeight:600, fontSize:13,
+                background: form.type==='savory' ? C.accentBg : C.card,
+                border:`1px solid ${form.type==='savory' ? C.accent+'55' : C.border}`,
+                color: form.type==='savory' ? C.accent : C.muted,
+              }}>🧂 Salé</button>
+              <button onClick={() => set('type', form.type==='sweet' ? null : 'sweet')} style={{
+                flex:1, padding:'9px', borderRadius:9, cursor:'pointer', fontWeight:600, fontSize:13,
+                background: form.type==='sweet' ? C.sweetBg : C.card,
+                border:`1px solid ${form.type==='sweet' ? C.sweet+'55' : C.border}`,
+                color: form.type==='sweet' ? C.sweet : C.muted,
+              }}>🍰 Sucré</button>
+            </div>
+          </div>
+
           <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🏷 Tags (séparés par virgule)</label>
           <input value={form.tagsStr} onChange={e=>set('tagsStr',e.target.value)} placeholder="volaille, rapide, four..." style={inp} />
         </div>
@@ -5120,6 +5199,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>3.0.3</span> — Onglets Salé/Sucré · toggle 🧂🍰 sur chaque carte · classification rapide<br/>
             <span style={{ color:C.accent }}>3.0.2</span> — En-têtes catégories courses : fond accentué + bordure gauche<br/>
             <span style={{ color:C.accent }}>3.0.1</span> — Fix updateMealPersons repas personnalisés (null recipeId)<br/>
             <span style={{ color:C.accent }}>3.0.0</span> — Ingrédients dans mode cuisine · Filtre tags AND<br/>
