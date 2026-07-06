@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.0.3"; // v52
+const VERSION = "3.0.4"; // v53
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -1542,7 +1542,8 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
     const [cy, cw] = currentWeek.split('-W').map(Number);
     const latestByRecipe = {};
     meals.forEach(m => {
-      if (!m.recipeId) return; // custom meals exclus du calcul de score
+      if (!m.recipeId) return;  // custom meals exclus
+      if (!m.done) return;      // ne compte que les repas effectivement cuisinés
       if (!latestByRecipe[m.recipeId] || m.weekKey > latestByRecipe[m.recipeId])
         latestByRecipe[m.recipeId] = m.weekKey;
     });
@@ -1558,14 +1559,14 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
 
   const recipeScore = r => scores[r.id] ?? 52;
 
-  /** Libellé "dernière utilisation" affiché sous le nom */
+  /** Libellé "dernière cuisson" affiché sous le nom */
   const lastUsedLabel = r => {
     const score = recipeScore(r);
-    if (score === 52) return null; // jamais → pas de label
-    if (score === 0)  return { text: 'Cette semaine',   color: C.orange };
-    if (score === 1)  return { text: 'Semaine passée',  color: C.orange };
-    if (score < 4)    return { text: `Il y a ${score} sem.`, color: C.muted };
-    return               { text: `Il y a ${score} sem.`, color: C.green };
+    if (score === 52) return null; // jamais cuisiné → pas de label
+    if (score === 0)  return { text: 'Cuisiné cette semaine', color: C.orange };
+    if (score === 1)  return { text: 'Cuisiné la semaine passée', color: C.orange };
+    if (score < 4)    return { text: `Cuisiné il y a ${score} sem.`, color: C.muted };
+    return               { text: `Cuisiné il y a ${score} sem.`, color: C.green };
   };
 
   // Tags disponibles
@@ -5199,6 +5200,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>3.0.4</span> — Score recettes basé sur date de cuisson (✓ coché) et non date de planification<br/>
             <span style={{ color:C.accent }}>3.0.3</span> — Onglets Salé/Sucré · toggle 🧂🍰 sur chaque carte · classification rapide<br/>
             <span style={{ color:C.accent }}>3.0.2</span> — En-têtes catégories courses : fond accentué + bordure gauche<br/>
             <span style={{ color:C.accent }}>3.0.1</span> — Fix updateMealPersons repas personnalisés (null recipeId)<br/>
