@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.0.4"; // v53
+const VERSION = "3.0.5"; // v54
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -244,7 +244,14 @@ function mergeOrAdd(list, newItem) {
   const existing = list.find(s => !s.checked && stemFrName(s.name.trim()) === normName);
   if (!existing) return [...list, newItem];
   const merged = tryMergeQty(existing.qty, existing.unit, newItem.qty, newItem.unit);
-  if (merged) return list.map(s => s.id === existing.id ? { ...s, qty: merged.qty, unit: merged.unit } : s);
+  if (merged) {
+    // Met à jour la catégorie seulement si le nouvel article en a une valide
+    // (évite d'écraser une catégorie existante avec undefined/null)
+    const catUpdate = newItem.categoryId ? { categoryId: newItem.categoryId } : {};
+    return list.map(s => s.id === existing.id
+      ? { ...s, qty: merged.qty, unit: merged.unit, ...catUpdate }
+      : s);
+  }
   return [...list, newItem]; // unités incompatibles → article séparé
 }
 
@@ -4171,13 +4178,11 @@ function ShoppingTab() {
   const handleAdd = () => {
     if (!newName.trim()) return;
     const name = newName.trim();
-    const hasKeywordMatch = cats.some(c =>
-      c.kw?.length > 0 && c.kw.some(k => matchesKeyword(name.toLowerCase(), k.toLowerCase()))
-    );
-    if (!hasKeywordMatch) {
+    const catId = categorize(name, cats);
+    if (!catId) {
       setCatAssignItem({ name, qty: newQty, unit: newUnit });
     } else {
-      addShoppingItem(name, newQty, newUnit);
+      addShoppingItem(name, newQty, newUnit, catId);
       setNewName(''); setNewQty(''); setNewUnit('');
     }
   };
@@ -5200,6 +5205,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>3.0.5</span> — Fix catégorisation : handleAdd sans catId · mergeOrAdd préserve catégorie existante<br/>
             <span style={{ color:C.accent }}>3.0.4</span> — Score recettes basé sur date de cuisson (✓ coché) et non date de planification<br/>
             <span style={{ color:C.accent }}>3.0.3</span> — Onglets Salé/Sucré · toggle 🧂🍰 sur chaque carte · classification rapide<br/>
             <span style={{ color:C.accent }}>3.0.2</span> — En-têtes catégories courses : fond accentué + bordure gauche<br/>
