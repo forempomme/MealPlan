@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.0.5"; // v54
+const VERSION = "3.0.6"; // v55
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -1265,14 +1265,13 @@ function PlanningTab() {
               );
             });
             if (uncatItems.length > 0) {
+              // Stocke les données brutes — pas de closure sur addIngredientsFromRecipe
+              // pour éviter un appel avec cats/context périmés
               setMultiCatData({
                 uncatItems,
-                addAll: (catOverrides) => {
-                  filterData.selections.forEach(({ recipe, persons: p }) => {
-                    const ids = selectedByRecipe[recipe.id] || [];
-                    if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides, mealIds[recipe.id]);
-                  });
-                },
+                selections: filterData.selections,
+                selectedByRecipe,
+                mealIds,
               });
             } else {
               filterData.selections.forEach(({ recipe, persons: p }) => {
@@ -1289,8 +1288,22 @@ function PlanningTab() {
       {multiCatData && (
         <MultiCategoryAssignModal
           uncatItems={multiCatData.uncatItems}
-          onConfirm={(catOverrides) => { multiCatData.addAll(catOverrides); setMultiCatData(null); }}
-          onCancel={() => { multiCatData.addAll({}); setMultiCatData(null); }}
+          onConfirm={(catOverrides) => {
+            // Appel direct depuis le render courant → addIngredientsFromRecipe et cats toujours frais
+            multiCatData.selections.forEach(({ recipe, persons: p }) => {
+              const ids = multiCatData.selectedByRecipe[recipe.id] || [];
+              if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides, multiCatData.mealIds[recipe.id]);
+            });
+            setMultiCatData(null);
+          }}
+          onCancel={() => {
+            // Annulation : ajoute quand même les ingrédients sans catOverrides
+            multiCatData.selections.forEach(({ recipe, persons: p }) => {
+              const ids = multiCatData.selectedByRecipe[recipe.id] || [];
+              if (ids.length) addIngredientsFromRecipe(recipe, p, ids, {}, multiCatData.mealIds[recipe.id]);
+            });
+            setMultiCatData(null);
+          }}
         />
       )}
       {dupWeek && (
@@ -5205,6 +5218,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>3.0.6</span> — Fix catégorisation recette planning : multiCatData données brutes (plus de closure stale)<br/>
             <span style={{ color:C.accent }}>3.0.5</span> — Fix catégorisation : handleAdd sans catId · mergeOrAdd préserve catégorie existante<br/>
             <span style={{ color:C.accent }}>3.0.4</span> — Score recettes basé sur date de cuisson (✓ coché) et non date de planification<br/>
             <span style={{ color:C.accent }}>3.0.3</span> — Onglets Salé/Sucré · toggle 🧂🍰 sur chaque carte · classification rapide<br/>
