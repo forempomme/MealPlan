@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.0.7"; // v56
+const VERSION = "3.1.0"; // v57
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -85,6 +85,30 @@ const DEFAULT_CATS = [
   { id:'c8', name:'Boissons',           emoji:'🍶', kw:['eau','jus','vin','bière','biere','café','cafe','thé','the','sirop','limonade'], order:7 },
   { id:'c9', name:'Autre',              emoji:'🛍️', kw:[], order:8 },
 ];
+
+// ══════════════════════════════════════════════════════
+//  SAISONS DE RECETTE
+// ══════════════════════════════════════════════════════
+const SEASONS = [
+  { id:'spring', label:'Printemps', emoji:'🌱' },
+  { id:'summer', label:'Été',       emoji:'☀️' },
+  { id:'autumn', label:'Automne',   emoji:'🍂' },
+  { id:'winter', label:'Hiver',     emoji:'❄️' },
+];
+
+/** Saison actuelle selon le mois (hémisphère nord, non configurable) */
+function getCurrentSeason(date = new Date()) {
+  const m = date.getMonth();
+  if (m >= 2 && m <= 4)  return 'spring';
+  if (m >= 5 && m <= 7)  return 'summer';
+  if (m >= 8 && m <= 10) return 'autumn';
+  return 'winter';
+}
+
+/** seasons vide/absent → 'all' (mixte), pour compat avec les recettes existantes */
+function getRecipeSeasons(recipe) {
+  return (recipe.seasons && recipe.seasons.length) ? recipe.seasons : ['all'];
+}
 
 // ══════════════════════════════════════════════════════
 //  HELPERS
@@ -1567,6 +1591,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
   const [freeText,    setFreeText]    = useState('');
 
   const currentWeek = getISOWeekKey();
+  const currentSeason = useMemo(() => getCurrentSeason(), []);
 
   // Pré-calcul O(meals) au lieu de O(recipes × meals)
   const scores = useMemo(() => {
@@ -1625,7 +1650,12 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
   const pickRandom = () => {
     const pool = filtered.filter(r => !selected.has(r.id));
     if (!pool.length) return;
-    const weights = pool.map(r => Math.max(recipeScore(r), 1));
+    const weights = pool.map(r => {
+      const base = Math.max(recipeScore(r), 1);
+      const rs = getRecipeSeasons(r);
+      const seasonMatch = rs.includes('all') || rs.includes(currentSeason);
+      return seasonMatch ? base : base * 0.2; // hors-saison : poids réduit, pas exclu
+    });
     const total   = weights.reduce((a,b) => a+b, 0);
     let rand = Math.random() * total;
     for (let i = 0; i < pool.length; i++) {
@@ -1819,6 +1849,7 @@ function RecipesTab() {
   const [search,      setSearch]      = useState('');
   const [filterFav,   setFilterFav]   = useState(false);
   const [filterTags,  setFilterTags]  = useState([]);
+  const [filterSeasons, setFilterSeasons] = useState([]);
   const [sort,        setSort]        = useState('newest');
   const [typeFilter,  setTypeFilter]  = useState('all'); // 'all' | 'savory' | 'sweet'
   const [filterOpen,  setFilterOpen]  = useState(false);
@@ -1836,12 +1867,16 @@ function RecipesTab() {
     return counts;
   }, [meals]);
 
-  const activeFilters = (filterFav ? 1 : 0) + filterTags.length + (sort !== 'newest' ? 1 : 0);
+  const activeFilters = (filterFav ? 1 : 0) + filterTags.length + filterSeasons.length + (sort !== 'newest' ? 1 : 0);
 
   // Filtrage : nom OU ingrédient
   const filtered = useMemo(() => recipes.filter(r => {
     if (filterFav && !r.favorite) return false;
     if (filterTags.length && !filterTags.every(t => (r.tags||[]).includes(t))) return false;
+    if (filterSeasons.length) {
+      const rs = getRecipeSeasons(r);
+      if (!filterSeasons.some(s => rs.includes(s))) return false; // OR, pas AND
+    }
     if (typeFilter !== 'all' && r.type !== typeFilter) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -1850,7 +1885,7 @@ function RecipesTab() {
       if (!inName && !inIng) return false;
     }
     return true;
-  }), [recipes, filterFav, filterTags, search, typeFilter]);
+  }), [recipes, filterFav, filterTags, filterSeasons, search, typeFilter]);
 
   // Tri
   const sorted = useMemo(() => {
@@ -1868,7 +1903,7 @@ function RecipesTab() {
 
   const blankRecipe = () => ({
     name:'', emoji:'🍽️', portions:4, url:'', tags:[], favorite:false,
-    rating:0, cookTimeMinutes:0, note:'', type: null,
+    rating:0, cookTimeMinutes:0, note:'', type: null, seasons: [],
     ingredients:[{ id:genId(), name:'', qty:'', unit:'' }],
     steps:[''],
   });
@@ -1956,6 +1991,7 @@ function RecipesTab() {
           onClose={() => setFilterOpen(false)}
           filterFav={filterFav} setFilterFav={setFilterFav}
           filterTags={filterTags} setFilterTags={setFilterTags}
+          filterSeasons={filterSeasons} setFilterSeasons={setFilterSeasons}
           allTags={allTags}
           sort={sort} setSort={setSort}
         />
@@ -1983,12 +2019,14 @@ function RecipesTab() {
   );
 }
 
-function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTags, allTags, sort, setSort }) {
+function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTags, filterSeasons, setFilterSeasons, allTags, sort, setSort }) {
   const [tagSearch, setTagSearch] = useState('');
-  const activeCount = (filterFav ? 1 : 0) + filterTags.length + (sort !== 'newest' ? 1 : 0);
+  const activeCount = (filterFav ? 1 : 0) + filterTags.length + filterSeasons.length + (sort !== 'newest' ? 1 : 0);
 
   const toggleTag = (t) =>
     setFilterTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+  const toggleFilterSeason = (id) =>
+    setFilterSeasons(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const visibleTags = tagSearch
     ? allTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase()))
@@ -2039,6 +2077,29 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
           {filterFav && <span style={{ color:C.orange, fontSize:16 }}>✓</span>}
         </div>
 
+        <SecTitle>Saison</SecTitle>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:14 }}>
+          {SEASONS.map(s => {
+            const active = filterSeasons.includes(s.id);
+            return (
+              <button key={s.id} onClick={() => toggleFilterSeason(s.id)} style={{
+                background: active ? C.accentBg : C.border,
+                color: active ? C.accent : C.muted,
+                border: active ? `1px solid ${C.accent}44` : '1px solid transparent',
+                padding:'6px 14px', borderRadius:20, fontSize:12, cursor:'pointer',
+                fontWeight: active ? 700 : 400,
+              }}>{active && '✓ '}{s.emoji} {s.label}</button>
+            );
+          })}
+          <button onClick={() => toggleFilterSeason('all')} style={{
+            background: filterSeasons.includes('all') ? C.greenBg : C.border,
+            color: filterSeasons.includes('all') ? C.green : C.muted,
+            border: filterSeasons.includes('all') ? `1px solid ${C.green}44` : '1px solid transparent',
+            padding:'6px 14px', borderRadius:20, fontSize:12, cursor:'pointer',
+            fontWeight: filterSeasons.includes('all') ? 700 : 400,
+          }}>{filterSeasons.includes('all') && '✓ '}🔄 Mixte</button>
+        </div>
+
         {allTags.length > 0 && (<>
           <SecTitle>
             Tags
@@ -2082,7 +2143,7 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
         </>)}
 
         {activeCount > 0 && (
-          <button onClick={() => { setFilterFav(false); setFilterTags([]); setSort('newest'); }} style={{
+          <button onClick={() => { setFilterFav(false); setFilterTags([]); setFilterSeasons([]); setSort('newest'); }} style={{
             width:'100%', padding:'10px', background:C.redBg, color:C.red,
             border:`1px solid ${C.red}33`, borderRadius:10, cursor:'pointer', fontSize:13, marginBottom:8,
           }}>✕ Effacer les filtres et le tri</button>
@@ -2220,6 +2281,18 @@ function RecipeCard({ recipe, onClick, onDelete, onTypeChange }) {
               </span>
             )}
           </div>
+          {(() => {
+            const rs = getRecipeSeasons(recipe);
+            if (rs.includes('all')) return null; // pas de badge si "toutes saisons"
+            return (
+              <div style={{ display:'flex', gap:2, marginTop:3 }}>
+                {rs.map(sid => {
+                  const s = SEASONS.find(x => x.id === sid);
+                  return s ? <span key={sid} title={s.label} style={{ fontSize:11 }}>{s.emoji}</span> : null;
+                })}
+              </div>
+            );
+          })()}
           {(recipe.tags||[]).length > 0 && (
             <div style={{ display:'flex', gap:3, flexWrap:'wrap', marginTop:4 }}>
               {recipe.tags.slice(0,2).map(t => (
@@ -3327,6 +3400,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     tagsStr: (recipe.tags||[]).join(', '),
     ingredients: recipe.ingredients?.length ? recipe.ingredients.map(i=>({...i})) : [{ id:genId(), name:'', qty:'', unit:'' }],
     steps: recipe.steps?.length ? [...recipe.steps] : [''],
+    seasons: recipe.seasons ? [...recipe.seasons] : [],
   });
   const [closeWarning, setCloseWarning] = useState(false);
 
@@ -3339,6 +3413,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     type: form.type || null,
     ingredients: form.ingredients.filter(i => i.name.trim()),
     steps: form.steps.filter(s => s.trim()),
+    seasons: [...(form.seasons||[])].sort(),
   });
   if (initialRef.current === null) initialRef.current = snapshot();
 
@@ -3576,6 +3651,15 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
   };
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const toggleSeason = (id) => {
+    setForm(f => {
+      const cur = f.seasons || [];
+      if (id === 'all') return { ...f, seasons: cur.includes('all') ? [] : ['all'] };
+      const withoutAll = cur.filter(s => s !== 'all');
+      const next = withoutAll.includes(id) ? withoutAll.filter(s => s !== id) : [...withoutAll, id];
+      return { ...f, seasons: next };
+    });
+  };
   const addIng  = () => {
     const newIng = { id:genId(), name:'', qty:'', unit:'' };
     set('ingredients', [...form.ingredients, newIng]);
@@ -3613,6 +3697,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
       steps: form.steps.filter(s=>s.trim()),
       portions: parseInt(form.portions)||6,
       cookTimeMinutes: parseInt(form.cookTimeMinutes)||0,
+      seasons: form.seasons || [],
     });
   };
 
@@ -3808,6 +3893,29 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
                 border:`1px solid ${form.type==='sweet' ? C.sweet+'55' : C.border}`,
                 color: form.type==='sweet' ? C.sweet : C.muted,
               }}>🍰 Sucré</button>
+            </div>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:8 }}>Saison</label>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {SEASONS.map(s => {
+                const active = (form.seasons||[]).includes(s.id);
+                return (
+                  <button key={s.id} onClick={() => toggleSeason(s.id)} style={{
+                    padding:'7px 12px', borderRadius:9, cursor:'pointer', fontWeight:600, fontSize:12,
+                    background: active ? C.accentBg : C.card,
+                    border:`1px solid ${active ? C.accent+'55' : C.border}`,
+                    color: active ? C.accent : C.muted,
+                  }}>{s.emoji} {s.label}</button>
+                );
+              })}
+              <button onClick={() => toggleSeason('all')} style={{
+                padding:'7px 12px', borderRadius:9, cursor:'pointer', fontWeight:600, fontSize:12,
+                background: (form.seasons||[]).includes('all') ? C.greenBg : C.card,
+                border:`1px solid ${(form.seasons||[]).includes('all') ? C.green+'55' : C.border}`,
+                color: (form.seasons||[]).includes('all') ? C.green : C.muted,
+              }}>🔄 Mixte</button>
             </div>
           </div>
 
