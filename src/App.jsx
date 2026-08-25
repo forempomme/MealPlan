@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.0.6"; // v55
+const VERSION = "3.0.7"; // v56
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -1004,7 +1004,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 //  PLANNING TAB
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
-  const { meals, recipes, cats, settings, planningTarget, setPlanningTarget, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack, updSettings } = useApp();
+  const { meals, recipes, cats, settings, planningTarget, setPlanningTarget, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack, updSettings, updateCat } = useApp();
   const [pickerWeek,   setPickerWeek]   = useState(null);
   const [dupWeek,      setDupWeek]      = useState(null);
   const [filterData,   setFilterData]   = useState(null);
@@ -1289,10 +1289,21 @@ function PlanningTab() {
         <MultiCategoryAssignModal
           uncatItems={multiCatData.uncatItems}
           onConfirm={(catOverrides) => {
-            // Appel direct depuis le render courant → addIngredientsFromRecipe et cats toujours frais
+            // 1. Ajoute les ingrédients à la liste de courses
             multiCatData.selections.forEach(({ recipe, persons: p }) => {
               const ids = multiCatData.selectedByRecipe[recipe.id] || [];
               if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides, multiCatData.mealIds[recipe.id]);
+            });
+            // 2. Enregistre le nom de chaque ingrédient comme mot-clé dans sa catégorie assignée
+            //    → la prochaine fois que cette recette est ajoutée, la catégorie sera reconnue automatiquement
+            multiCatData.uncatItems.forEach(item => {
+              const catId = catOverrides[item.id];
+              if (!catId) return;
+              const cat = cats.find(c => c.id === catId);
+              if (!cat) return;
+              const kw = item.name.trim().toLowerCase();
+              const already = (cat.kw || []).some(k => matchesKeyword(kw, k.toLowerCase()));
+              if (kw && !already) updateCat({ ...cat, kw: [...(cat.kw || []), kw] });
             });
             setMultiCatData(null);
           }}
@@ -5218,6 +5229,7 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
             <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
             <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
+            <span style={{ color:C.accent }}>3.0.7</span> — Fix catégorisation recette planning : enregistrement du mot-clé à la confirmation<br/>
             <span style={{ color:C.accent }}>3.0.6</span> — Fix catégorisation recette planning : multiCatData données brutes (plus de closure stale)<br/>
             <span style={{ color:C.accent }}>3.0.5</span> — Fix catégorisation : handleAdd sans catId · mergeOrAdd préserve catégorie existante<br/>
             <span style={{ color:C.accent }}>3.0.4</span> — Score recettes basé sur date de cuisson (✓ coché) et non date de planification<br/>
