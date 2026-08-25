@@ -110,6 +110,17 @@ function getRecipeSeasons(recipe) {
   return (recipe.seasons && recipe.seasons.length) ? recipe.seasons : ['all'];
 }
 
+/**
+ * Calcule le prochain état `seasons` après un tap sur une chip.
+ * Règle d'exclusion : "Mixte" écrase tout ; sélectionner une saison retire "Mixte".
+ * Utilisé à la fois par RecipeEditor (form.seasons) et RecipeCard (recipe.seasons directement).
+ */
+function toggleSeasonInList(list, id) {
+  if (id === 'all') return list.includes('all') ? [] : ['all'];
+  const withoutAll = list.filter(s => s !== 'all');
+  return withoutAll.includes(id) ? withoutAll.filter(s => s !== id) : [...withoutAll, id];
+}
+
 // ══════════════════════════════════════════════════════
 //  HELPERS
 // ══════════════════════════════════════════════════════
@@ -1981,6 +1992,7 @@ function RecipesTab() {
             onClick={() => setDetailId(r.id)}
             onDelete={() => deleteRecipe(r.id)}
             onTypeChange={type => updateRecipe({ ...r, type: r.type === type ? null : type })}
+            onSeasonsChange={id => updateRecipe({ ...r, seasons: toggleSeasonInList(r.seasons || [], id) })}
           />
         ))}
       </div>
@@ -2249,7 +2261,7 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
   );
 }
 
-function RecipeCard({ recipe, onClick, onDelete, onTypeChange }) {
+function RecipeCard({ recipe, onClick, onDelete, onTypeChange, onSeasonsChange }) {
   const { meals } = useApp();
   const mealCount = meals.filter(m => m.recipeId === recipe.id).length;
 
@@ -2333,6 +2345,33 @@ function RecipeCard({ recipe, onClick, onDelete, onTypeChange }) {
           color: recipe.type==='sweet' ? C.sweet : C.muted,
           transition:'all 0.12s',
         }}>🍰 Sucré</button>
+      </div>
+
+      {/* Toggle rapide Saisons */}
+      <div style={{ display:'flex', gap:3, marginTop:5 }}>
+        {SEASONS.map(s => {
+          const active = (recipe.seasons||[]).includes(s.id);
+          return (
+            <button key={s.id}
+              onClick={e => { e.stopPropagation(); onSeasonsChange?.(s.id); }}
+              title={s.label}
+              style={{
+                flex:1, padding:'4px 0', borderRadius:6, fontSize:13, cursor:'pointer',
+                lineHeight:1, transition:'all 0.12s',
+                background: active ? C.accentBg : 'transparent',
+                border:`1px solid ${active ? C.accent+'66' : C.border}`,
+              }}>{s.emoji}</button>
+          );
+        })}
+        <button
+          onClick={e => { e.stopPropagation(); onSeasonsChange?.('all'); }}
+          title="Mixte (toutes saisons)"
+          style={{
+            flex:1, padding:'4px 0', borderRadius:6, fontSize:13, cursor:'pointer',
+            lineHeight:1, transition:'all 0.12s',
+            background: (recipe.seasons||[]).includes('all') ? C.greenBg : 'transparent',
+            border:`1px solid ${(recipe.seasons||[]).includes('all') ? C.green+'66' : C.border}`,
+          }}>🔄</button>
       </div>
     </div>
   );
@@ -3651,15 +3690,7 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
   };
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const toggleSeason = (id) => {
-    setForm(f => {
-      const cur = f.seasons || [];
-      if (id === 'all') return { ...f, seasons: cur.includes('all') ? [] : ['all'] };
-      const withoutAll = cur.filter(s => s !== 'all');
-      const next = withoutAll.includes(id) ? withoutAll.filter(s => s !== id) : [...withoutAll, id];
-      return { ...f, seasons: next };
-    });
-  };
+  const toggleSeason = (id) => setForm(f => ({ ...f, seasons: toggleSeasonInList(f.seasons || [], id) }));
   const addIng  = () => {
     const newIng = { id:genId(), name:'', qty:'', unit:'' };
     set('ingredients', [...form.ingredients, newIng]);
