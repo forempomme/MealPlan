@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.1.0"; // v57
+const VERSION = "3.1.2"; // v59
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -216,13 +216,21 @@ function categorize(name, cats) {
   return cats.find(c => !c.kw || c.kw.length === 0)?.id ?? cats[cats.length - 1]?.id;
 }
 
+/**
+ * Vrai si au moins une catégorie a un mot-clé qui correspond réellement au nom.
+ * Distinct de categorize() : categorize() retourne TOUJOURS un id (fallback sur "Autre"),
+ * donc il ne permet pas de savoir si la correspondance était réelle ou un fallback.
+ */
+function hasKeywordMatch(name, cats) {
+  const low = name.toLowerCase();
+  return cats.some(c => c.kw?.length > 0 && c.kw.some(k => matchesKeyword(low, k.toLowerCase())));
+}
+
 /** Retourne les ingrédients sélectionnés sans correspondance de mot-clé */
 function getUncatIngredients(recipe, ingIds, cats) {
   return (recipe.ingredients || [])
     .filter(ing => ingIds.includes(ing.id))
-    .filter(ing => !cats.some(c =>
-      c.kw?.length > 0 && c.kw.some(k => matchesKeyword(ing.name.toLowerCase(), k.toLowerCase()))
-    ));
+    .filter(ing => !hasKeywordMatch(ing.name, cats));
 }
 
 // ══════════════════════════════════════════════════════
@@ -4341,11 +4349,10 @@ function ShoppingTab() {
   const handleAdd = () => {
     if (!newName.trim()) return;
     const name = newName.trim();
-    const catId = categorize(name, cats);
-    if (!catId) {
+    if (!hasKeywordMatch(name, cats)) {
       setCatAssignItem({ name, qty: newQty, unit: newUnit });
     } else {
-      addShoppingItem(name, newQty, newUnit, catId);
+      addShoppingItem(name, newQty, newUnit, categorize(name, cats));
       setNewName(''); setNewQty(''); setNewUnit('');
     }
   };

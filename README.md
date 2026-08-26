@@ -2,7 +2,7 @@
 
 Application Android de planification des repas et gestion des courses. Interface React (Vite) dans une WebView Android native.
 
-**Version actuelle : 3.0.7** · build v56
+**Version actuelle : 3.1.2** · build v59
 
 ---
 
@@ -29,6 +29,7 @@ Application Android de planification des repas et gestion des courses. Interface
 - Avertissement si on quitte l'éditeur avec des modifications non sauvegardées
 - Duplication vers éditeur direct
 - Favori toggle inline dans la fiche
+- Classement par saison (Printemps/Été/Automne/Hiver, multi-sélection, ou Mixte) : chips dans l'éditeur, toggle rapide sur chaque carte, filtre dédié (logique OR), badge sur la carte, pondération du tirage 🎲 selon la saison en cours
 
 ### 🛒 Courses
 - Catégories organisées par ordre drag-and-drop, en-têtes visuellement distincts (fond bleu #1A2636 + bordure accent)
@@ -163,6 +164,9 @@ RecipePicker → IngredientFilterModal → [MultiCategoryAssignModal si inconnus
 
 | Version | Changements |
 |---|---|
+| **3.1.2** | Fix catégorisation ajout manuel courses : `categorize()` retournait toujours "Autre" en fallback, la modale de catégorisation ne se déclenchait jamais |
+| **3.1.1** | Toggle rapide saison sur RecipeCard (classement en masse des recettes existantes) |
+| **3.1.0** | Classement des recettes par saison : chips éditeur, filtre OR, badge, tirage 🎲 pondéré |
 | **3.0.7** | Fix catégorisation depuis planning : enregistrement du mot-clé à la confirmation |
 | **3.0.6** | Fix catégorisation depuis planning : multiCatData données brutes (plus de closure stale) |
 | **3.0.5** | Fix catégorisation : handleAdd sans catId · mergeOrAdd préserve catégorie existante |
