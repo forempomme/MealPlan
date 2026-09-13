@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.1.2"; // v59
+const VERSION = "3.2.1"; // v62
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -511,6 +511,17 @@ function AppProvider({ children }) {
     showSnack(`✅ ${src.length} repas dupliqués`);
   };
 
+  /** Reporte les repas sélectionnés (par id) d'une semaine vers la semaine suivante. */
+  const reportMeals = (mealIds, weekKey) => {
+    if (!mealIds.length) return;
+    const target = shiftWeek(weekKey, 1);
+    setMeals(p => p.map(m => mealIds.includes(m.id) ? { ...m, weekKey: target } : m));
+    showSnack(
+      `↷ ${mealIds.length} repas reporté${mealIds.length>1?'s':''} vers S${target.split('-W')[1]}`,
+      () => setMeals(p => p.map(m => mealIds.includes(m.id) ? { ...m, weekKey } : m))
+    );
+  };
+
   /* ── Courses ── */
   const addShoppingItem = (name, qty, unit, catId) => {
     const newItem = {
@@ -610,6 +621,23 @@ function AppProvider({ children }) {
       }
     }
   };
+  /**
+   * Ajoute UN mot-clé à une catégorie sans déclencher le balayage rétroactif de updateCat.
+   * updateCat() ferme `shopping` sur l'état du render en cours : appelé juste après un
+   * setShopping() dans le même handler (ex: recatégoriser CET article puis enregistrer
+   * son nom comme mot-clé), il voit encore l'ancienne categoryId de l'article qu'on vient
+   * de déplacer et le re-traite inutilement (double calcul, double snack qui s'écrasent).
+   * Ici on fait uniquement l'ajout de données, sans effet de bord, et on retourne un booléen
+   * pour que l'appelant sache s'il doit informer l'utilisateur.
+   */
+  const addKeywordToCat = (catId, kw) => {
+    const cat = cats.find(c => c.id === catId);
+    if (!cat || !kw) return false;
+    const already = cat.kw?.some(k => matchesKeyword(kw, k.toLowerCase()));
+    if (already) return false;
+    setCats(p => p.map(c => c.id === catId ? { ...c, kw: [...(c.kw || []), kw] } : c));
+    return true;
+  };
   const reorderCats = list => setCats(list.map((c, i) => ({ ...c, order: i })));
   const updSettings = patch => setSettings(p => ({ ...p, ...patch }));
 
@@ -625,9 +653,9 @@ function AppProvider({ children }) {
     <AppCtx.Provider value={{
       recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
       addRecipe, updateRecipe, duplicateRecipe, deleteRecipe,
-      addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek,
+      addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek, reportMeals,
       addShoppingItem, deleteShoppingItem, deleteShoppingItemsByIds, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
-      reorderItemsInCat, addCat, deleteCat, updateCat, reorderCats, updSettings, importAllData,
+      reorderItemsInCat, addCat, deleteCat, updateCat, addKeywordToCat, reorderCats, updSettings, importAllData,
       planningTarget, setPlanningTarget,
     }}>
       {children}
@@ -653,6 +681,7 @@ function Btn({ onClick, children, variant='default', small, disabled, style }) {
     danger:  { background:C.redBg,    color:C.red,    border:`1px solid ${C.red}44` },
     ghost:   { background:'transparent', color:C.muted },
     accent:  { background:C.accentBg, color:C.accent, border:`1px solid ${C.accent}44` },
+    orange:  { background:C.orangeBg, color:C.orange, border:`1px solid ${C.orange}44` },
   };
   return (
     <button onClick={disabled?undefined:onClick} style={{ ...base, ...vs[variant], ...style }}>
@@ -1047,7 +1076,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
 //  PLANNING TAB
 // ══════════════════════════════════════════════════════
 function PlanningTab() {
-  const { meals, recipes, cats, settings, planningTarget, setPlanningTarget, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack, updSettings, updateCat } = useApp();
+  const { meals, recipes, cats, settings, planningTarget, setPlanningTarget, addMeal, addIngredientsFromRecipe, duplicateWeek, showSnack, updSettings, addKeywordToCat } = useApp();
   const [pickerWeek,   setPickerWeek]   = useState(null);
   const [dupWeek,      setDupWeek]      = useState(null);
   const [filterData,   setFilterData]   = useState(null);
@@ -1342,11 +1371,7 @@ function PlanningTab() {
             multiCatData.uncatItems.forEach(item => {
               const catId = catOverrides[item.id];
               if (!catId) return;
-              const cat = cats.find(c => c.id === catId);
-              if (!cat) return;
-              const kw = item.name.trim().toLowerCase();
-              const already = (cat.kw || []).some(k => matchesKeyword(kw, k.toLowerCase()));
-              if (kw && !already) updateCat({ ...cat, kw: [...(cat.kw || []), kw] });
+              addKeywordToCat(catId, item.name.trim().toLowerCase());
             });
             setMultiCatData(null);
           }}
@@ -1376,10 +1401,15 @@ function PlanningTab() {
 }
 
 function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
-  const { meals, recipes } = useApp();
+  const { meals, recipes, reportMeals } = useApp();
   const [expanded, setExpanded] = useState(isCurrent);
+  const [reportOpen, setReportOpen] = useState(false);
   const weekMeals = meals.filter(m => m.weekKey === weekKey);
   const wn = weekKey.split('-W')[1];
+  const currentWeek = getISOWeekKey();
+  // "Reporter" n'a de sens que pour une semaine déjà entamée (passée ou en cours) —
+  // une semaine future n'a par définition aucun repas cuisiné, ce n'est pas la même chose.
+  const unfinishedMeals = weekKey <= currentWeek ? weekMeals.filter(m => !m.done) : [];
 
   const shareWeek = () => {
     const text = `📅 Semaine ${wn} — ${getWeekRange(weekKey)}\n\n` +
@@ -1446,8 +1476,23 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
             <Btn onClick={onAdd} variant="primary" small>+ Ajouter</Btn>
             <Btn onClick={onDup} variant="ghost" small>📋</Btn>
             {weekMeals.length > 0 && <Btn onClick={shareWeek} variant="ghost" small>📤</Btn>}
+            {unfinishedMeals.length > 0 && (
+              <Btn onClick={() => setReportOpen(true)} variant="orange" small>
+                ↷ Reporter
+              </Btn>
+            )}
           </div>
         </div>
+      )}
+
+      {reportOpen && (
+        <ReportMealsModal
+          weekKey={weekKey}
+          unfinishedMeals={unfinishedMeals}
+          recipes={recipes}
+          onClose={() => setReportOpen(false)}
+          onConfirm={(ids) => { reportMeals(ids, weekKey); setReportOpen(false); }}
+        />
       )}
     </div>
   );
@@ -1854,6 +1899,55 @@ function DupWeekModal({ fromKey, onClose, onDup }) {
         ))}
         <Btn onClick={() => onDup(target)} variant="primary" style={{ width:'100%', justifyContent:'center', marginTop:12 }}>
           Dupliquer →
+        </Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+/** Choix des repas non cuisinés à reporter vers la semaine suivante. Tout coché par défaut. */
+function ReportMealsModal({ weekKey, unfinishedMeals, recipes, onClose, onConfirm }) {
+  const targetWeek = shiftWeek(weekKey, 1);
+  const [selected, setSelected] = useState(() => new Set(unfinishedMeals.map(m => m.id)));
+
+  const toggle = id => setSelected(s => { const ns = new Set(s); ns.has(id) ? ns.delete(id) : ns.add(id); return ns; });
+  const count = selected.size;
+
+  return (
+    <BottomSheet title={`Reporter vers S${targetWeek.split('-W')[1]}`} onClose={onClose}>
+      <div style={{ padding:'10px 16px 20px' }}>
+        <div style={{ fontSize:12, color:C.muted, marginBottom:12 }}>
+          Décoche les repas que tu ne veux pas reporter.
+        </div>
+        {unfinishedMeals.map(meal => {
+          const recipe = recipes.find(r => r.id === meal.recipeId);
+          const name   = recipe?.name || meal.customName || 'Repas';
+          const emoji  = recipe?.emoji || '🍽';
+          const on     = selected.has(meal.id);
+          return (
+            <div key={meal.id} onClick={() => toggle(meal.id)} style={{
+              display:'flex', alignItems:'center', gap:10, padding:'9px 10px',
+              borderRadius:9, marginBottom:5, cursor:'pointer', transition:'all 0.12s',
+              background: on ? C.accentBg : C.bg,
+              border:`1px solid ${on ? C.accent+'44' : C.border}`,
+            }}>
+              <div style={{
+                width:18, height:18, borderRadius:5, flexShrink:0,
+                background: on ? C.accentDk : 'transparent',
+                border:`2px solid ${on ? C.accentDk : C.border}`,
+                display:'flex', alignItems:'center', justifyContent:'center',
+              }}>
+                {on && <span style={{ color:'#fff', fontSize:10, fontWeight:700 }}>✓</span>}
+              </div>
+              <span style={{ fontSize:18, flexShrink:0 }}>{emoji}</span>
+              <span style={{ flex:1, fontSize:14, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</span>
+              <span style={{ fontSize:11, color:C.muted, flexShrink:0 }}>👥{meal.persons}</span>
+            </div>
+          );
+        })}
+        <Btn onClick={() => count > 0 && onConfirm([...selected])} variant="orange" disabled={count === 0}
+          style={{ width:'100%', justifyContent:'center', marginTop:10 }}>
+          {count === 0 ? 'Sélectionne au moins un repas' : `↷ Reporter ${count} repas`}
         </Btn>
       </div>
     </BottomSheet>
@@ -4259,7 +4353,7 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
 //  COURSES TAB
 // ══════════════════════════════════════════════════════
 function ShoppingTab() {
-  const { shopping, cats, recipes, meals, addShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll, showSnack, reorderCats, updateCat } = useApp();
+  const { shopping, cats, recipes, meals, addShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll, showSnack, reorderCats, addKeywordToCat } = useApp();
   const [newName,  setNewName]  = useState('');
   const [newQty,   setNewQty]   = useState('');
   const [newUnit,  setNewUnit]  = useState('');
@@ -4525,18 +4619,21 @@ function ShoppingTab() {
         <CategoryAssignModal
           item={catAssignItem}
           onConfirm={(catId) => {
+            const normName = catAssignItem.name.trim().toLowerCase();
+            const willMerge = shopping.some(s => !s.checked && s.name.trim().toLowerCase() === normName);
             addShoppingItem(catAssignItem.name, catAssignItem.qty, catAssignItem.unit, catId);
             // Auto-ajoute le nom comme mot-clé dans la catégorie existante (la nouvelle catégorie
             // reçoit déjà le mot-clé directement dans handleCreateAndAdd de CategoryAssignModal)
             const cat = cats.find(c => c.id === catId);
+            let kwSuffix = '';
             if (cat) {
-              const kw = catAssignItem.name.trim().toLowerCase();
-              const already = cat.kw?.some(k => matchesKeyword(kw, k.toLowerCase()));
-              if (kw && !already) {
-                updateCat({ ...cat, kw: [...(cat.kw || []), kw] });
-                showSnack(`🏷 "${kw}" ajouté aux mots-clés de ${cat.emoji} ${cat.name}`);
-              }
+              const added = addKeywordToCat(cat.id, normName);
+              if (added) kwSuffix = ` · 🏷 "${normName}" ajouté aux mots-clés de ${cat.emoji} ${cat.name}`;
             }
+            // Si fusion avec un article existant, addShoppingItem a déjà affiché son propre
+            // snack (🔀 ou ⚠️) — on ne l'écrase que si on a une info supplémentaire à donner.
+            if (!willMerge) showSnack(`✅ "${catAssignItem.name}" ajouté à la liste${kwSuffix}`);
+            else if (kwSuffix) showSnack(`✅ Fusionné${kwSuffix}`);
             setNewName(''); setNewQty(''); setNewUnit('');
             setCatAssignItem(null);
           }}
@@ -4821,7 +4918,7 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
 }
 
 function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd }) {
-  const { deleteShoppingItem, updateShoppingItem, updateCat, showSnack, cats } = useApp();
+  const { deleteShoppingItem, updateShoppingItem, addKeywordToCat, showSnack, cats } = useApp();
   const [editing,  setEditing]  = useState(false);
   const [editName, setEditName] = useState(item.name);
   const [editQty,  setEditQty]  = useState(item.qty || '');
@@ -4831,24 +4928,29 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
   const sortedCats = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
 
   const saveEdit = () => {
-    if (editName.trim()) {
-      updateShoppingItem(item.id, {
-        name: editName.trim(), qty: parseFloat(editQty)||0,
-        unit: editUnit, categoryId: editCat,
-      });
-      // Si la catégorie a changé, ajoute le nom comme mot-clé dans la nouvelle catégorie
-      if (editCat && editCat !== item.categoryId) {
-        const cat = cats.find(c => c.id === editCat);
-        if (cat) {
-          const kw = editName.trim().toLowerCase();
-          const already = cat.kw?.some(k => matchesKeyword(kw, k.toLowerCase()));
-          if (kw && !already) {
-            updateCat({ ...cat, kw: [...(cat.kw || []), kw] });
-            showSnack(`🏷 "${kw}" ajouté aux mots-clés de ${cat.emoji} ${cat.name}`);
-          }
-        }
+    const name = editName.trim();
+    if (!name) {
+      showSnack('❌ Le nom ne peut pas être vide — modification annulée');
+      return;
+    }
+    if (!editCat) {
+      showSnack('❌ Choisis une catégorie — modification annulée');
+      return;
+    }
+    updateShoppingItem(item.id, {
+      name, qty: parseFloat(editQty)||0,
+      unit: editUnit, categoryId: editCat,
+    });
+    // Si la catégorie a changé, enregistre le nom comme mot-clé dans la nouvelle catégorie
+    let kwSuffix = '';
+    if (editCat !== item.categoryId) {
+      const cat = cats.find(c => c.id === editCat);
+      if (cat) {
+        const added = addKeywordToCat(cat.id, name.toLowerCase());
+        if (added) kwSuffix = ` · 🏷 "${name.toLowerCase()}" ajouté aux mots-clés de ${cat.emoji} ${cat.name}`;
       }
     }
+    showSnack(`✅ "${name}" mis à jour${kwSuffix}`);
     setEditing(false);
   };
 

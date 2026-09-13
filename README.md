@@ -2,7 +2,7 @@
 
 Application Android de planification des repas et gestion des courses. Interface React (Vite) dans une WebView Android native.
 
-**Version actuelle : 3.1.2** · build v59
+**Version actuelle : 3.2.1** · build v62
 
 ---
 
@@ -15,6 +15,7 @@ Application Android de planification des repas et gestion des courses. Interface
 - Note par repas
 - Badge "↩ déjà la semaine passée" si la même recette est planifiée deux semaines consécutives
 - Duplication d'une semaine entière vers une autre
+- Report groupé des repas non cuisinés d'une semaine (passée ou en cours) vers la semaine suivante, avec sélection des repas concernés (tout coché par défaut, décochable)
 - Navigation vers une semaine depuis la fiche recette (WeeksBadge)
 - Partage de la semaine (liste des repas + notes)
 
@@ -164,6 +165,9 @@ RecipePicker → IngredientFilterModal → [MultiCategoryAssignModal si inconnus
 
 | Version | Changements |
 |---|---|
+| **3.2.1** | Bouton "↷ Reporter" : ajout d'une sélection des repas à reporter (ReportMealsModal, tout coché par défaut) au lieu de tout déplacer d'un coup |
+| **3.2.0** | Bouton "↷ Reporter" sur WeekCard : déplace en un tap tous les repas non cuisinés d'une semaine vers la suivante (Snack + Annuler) |
+| **3.1.3** | Fix feedback édition article courses : `updateCat` fermait `shopping` sur un état obsolète juste après un `setShopping` dans le même handler → mot-clé parfois perdu, snack de succès manquant sur la plupart des sauvegardes. Nouvelle action `addKeywordToCat` sans effet de bord + confirmation systématique (succès/échec) sur l'édition d'article |
 | **3.1.2** | Fix catégorisation ajout manuel courses : `categorize()` retournait toujours "Autre" en fallback, la modale de catégorisation ne se déclenchait jamais |
 | **3.1.1** | Toggle rapide saison sur RecipeCard (classement en masse des recettes existantes) |
 | **3.1.0** | Classement des recettes par saison : chips éditeur, filtre OR, badge, tirage 🎲 pondéré |
