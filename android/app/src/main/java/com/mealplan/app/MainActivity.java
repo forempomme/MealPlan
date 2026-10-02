@@ -1,8 +1,10 @@
 package com.mealplan.app;
 
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -132,6 +134,30 @@ public class MainActivity extends AppCompatActivity {
             }).start();
         }
 
+        /**
+         * OCR local (ML Kit embarqué, zéro réseau) d'une photo de menu cantine.
+         * Indépendant de importRecipe() ci-dessus — ne le modifie ni ne le réutilise.
+         */
+        @JavascriptInterface
+        public void analyzeCantinePhoto(final String base64, final String cbId) {
+            new Thread(() -> {
+                try {
+                    byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                    Bitmap bitmap = CantineMenuOcr.decodeAndFixOrientation(bytes);
+                    if (bitmap == null) {
+                        deliverCantineResult(cbId, "{\"error\":\"Image illisible\"}");
+                        return;
+                    }
+                    CantineMenuOcr.analyze(bitmap, result -> deliverCantineResult(cbId, result));
+                } catch (Exception e) {
+                    String msg = e.getMessage() != null
+                        ? e.getMessage().replace("\"", "'").replace("\n", " ")
+                        : "Erreur inconnue";
+                    deliverCantineResult(cbId, "{\"error\":\"" + msg + "\"}");
+                }
+            }).start();
+        }
+
         @JavascriptInterface
         public void share(String title, String text) {
             Intent i = new Intent(Intent.ACTION_SEND);
@@ -149,6 +175,19 @@ public class MainActivity extends AppCompatActivity {
 
     private void showToast(final String msg) {
         runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_LONG).show());
+    }
+
+    /** Livre un résultat JSON au callback JS enregistré sous window.__mpCantineOCR[cbId]. */
+    private void deliverCantineResult(final String cbId, final String resultJson) {
+        final String safe = resultJson.replace("\\", "\\\\").replace("'", "\\'");
+        runOnUiThread(() ->
+            webView.evaluateJavascript(
+                "(function(){" +
+                "  var cb=window.__mpCantineOCR&&window.__mpCantineOCR['" + cbId + "'];" +
+                "  if(cb){try{cb(JSON.parse('" + safe + "'));}catch(e){cb({error:e.message});}" +
+                "  delete window.__mpCantineOCR['" + cbId + "'];}" +
+                "})()", null)
+        );
     }
 
     @Override public void onBackPressed() {

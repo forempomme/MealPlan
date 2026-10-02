@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.3.1"; // v64
+const VERSION = "3.4.0"; // v65
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -2050,10 +2050,12 @@ function ReportMealsModal({ weekKey, unfinishedMeals, recipes, onClose, onConfir
 // ══════════════════════════════════════════════════════
 
 /**
- * Analyse une photo de menu cantine via l'API Claude (vision) et ajoute
- * automatiquement les jours détectés. Pas d'étape de confirmation manuelle
- * par jour — l'ajout est direct ; la correction se fait ensuite via la liste
- * (tap sur un jour → CantineDayEditModal).
+ * Analyse une photo de menu cantine via OCR local (ML Kit embarqué côté
+ * natif, zéro réseau, zéro clé API — voir Android.analyzeCantinePhoto dans
+ * MainActivity.java / CantineMenuOcr.java) et ajoute automatiquement les
+ * jours détectés. Pas d'étape de confirmation manuelle par jour — l'ajout
+ * est direct ; la correction se fait ensuite via la liste (tap sur un jour
+ * → CantineDayEditModal).
  */
 function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
   useBackHandler(onClose);
@@ -2093,45 +2095,32 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
     reader.readAsDataURL(file);
   });
 
+  // Pont vers Android.analyzeCantinePhoto (OCR local ML Kit, zéro réseau) — même
+  // pattern callback que fetchViaAndroid/importRecipe, mais totalement indépendant.
+  const analyzeCantinePhotoNative = (base64) => new Promise((resolve, reject) => {
+    if (!window.Android?.analyzeCantinePhoto) {
+      reject(new Error("Pont Android indisponible — la reconnaissance de texte n'est pas câblée dans cette build."));
+      return;
+    }
+    const cbId = 'mp_cantine_' + Date.now();
+    window.__mpCantineOCR = window.__mpCantineOCR || {};
+    window.__mpCantineOCR[cbId] = (result) => {
+      if (result?.error) reject(new Error(result.error));
+      else resolve(result);
+    };
+    window.Android.analyzeCantinePhoto(base64, cbId);
+  });
+
   const handleFile = async (file) => {
     if (!file) return;
     abortRef.current = new AbortController();
     setImporting(true); setError(''); setResult(null); setImportStep('📷 Lecture de la photo…');
     try {
-      const base64    = await withTimeout(readFileAsBase64(file));
-      const mediaType = file.type || 'image/jpeg';
-      setImportStep('🤖 Analyse du menu via Claude…');
+      const base64 = await withTimeout(readFileAsBase64(file));
+      setImportStep('🔎 Reconnaissance de texte (local, hors-ligne)…');
 
-      const currentYear = new Date().getFullYear();
-      const res = await withTimeout(fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 4000,
-          system: `Tu analyses une photo de menu de cantine scolaire française. La photo montre une grille hebdomadaire : chaque jour (LUNDI/MARDI/MERCREDI/JEUDI/VENDREDI) a une date (JJ/MM) et jusqu'à 4 lignes : Entrée, Plat (souvent avec féculent), Fromage/laitage, Dessert.
-Un en-tête indique généralement la période complète (ex: "DU 14 SEPTEMBRE AU 9 OCTOBRE 2026") — utilise-la pour déduire l'ANNÉE de chaque date JJ/MM. Si aucune année n'est visible, utilise ${currentYear}.
-Réponds UNIQUEMENT avec un objet JSON valide, sans markdown ni texte autour :
-{"days":[{"date":"YYYY-MM-DD","entree":"...","plat":"...","fromage":"...","dessert":"..."}]}
-- Une entrée par jour scolaire visible sur l'image (ignore les week-ends).
-- Si une catégorie est absente sur un jour donné, mets une chaîne vide "".
-- Recopie le texte tel qu'il apparaît sur l'image, sans reformuler.`,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-              { type: 'text', text: 'Extrait tous les menus visibles sur cette photo au format JSON demandé.' },
-            ],
-          }],
-        }),
-      }));
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message || 'Erreur API Claude');
-      const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-      const jsonMatch = texts.replace(/^```(?:json)?\s*/im, '').replace(/\s*```\s*$/im, '').match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new SyntaxError('Aucun menu détecté dans la réponse.');
-      const parsed = JSON.parse(jsonMatch[0]);
-      const days = (parsed.days || []).filter(d => d && isValidISODate(d.date));
+      const data = await withTimeout(analyzeCantinePhotoNative(base64), 20000);
+      const days = (data.days || []).filter(d => d && isValidISODate(d.date));
       if (!days.length) throw new Error('Aucun jour valide extrait de la photo.');
 
       upsertCantineDays(days.map(d => ({
@@ -2146,10 +2135,7 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans markdown ni texte autour :
       setResult({ count: days.length, first: sortedDates[0], last: sortedDates[sortedDates.length-1] });
       setImportStep('');
     } catch (e) {
-      const isBadJson = e.message?.includes('JSON') || e instanceof SyntaxError;
-      setError(isBadJson
-        ? "Impossible de lire le menu sur cette photo. Essaie une photo plus nette, bien cadrée sur le tableau."
-        : (e.message || "Échec de l'import."));
+      setError(e.message || "Échec de l'import.");
       setImportStep('');
     } finally {
       setImporting(false);
@@ -2168,7 +2154,7 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans markdown ni texte autour :
         {!importing && !result && (
           <>
             <div style={{ fontSize:12, color:C.muted, marginBottom:16, lineHeight:1.6 }}>
-              Prends ou choisis une photo du menu cantine (tableau hebdomadaire, jours en colonnes). L'IA analyse l'image et ajoute automatiquement les menus détectés — aucune saisie à faire.
+              Prends ou choisis une photo du menu cantine (tableau hebdomadaire, jours en colonnes). Le texte est lu directement sur le téléphone (hors-ligne, sans compte ni clé) et les menus détectés sont ajoutés automatiquement.
             </div>
             {error && (
               <div style={{ color:C.red, fontSize:12, lineHeight:1.6, marginBottom:12, background:C.redBg, border:`1px solid ${C.red}33`, borderRadius:9, padding:10 }}>
@@ -5740,7 +5726,7 @@ function SettingsTab() {
       }}>
         <span style={{ fontSize:15 }}>📷</span>
         <span style={{ fontSize:12, color:C.soft, lineHeight:1.5 }}>
-          Prends une photo du menu de l'école, l'IA l'analyse et ajoute les jours automatiquement — purement informatif, n'apparaît pas dans tes recettes, juste en rappel dans chaque semaine du Planning.
+          Prends une photo du menu de l'école : le texte est lu directement sur le téléphone (hors-ligne) et les jours sont ajoutés automatiquement — purement informatif, n'apparaît pas dans tes recettes, juste en rappel dans chaque semaine du Planning.
         </span>
       </div>
       {sortedCantine.length === 0 ? (
