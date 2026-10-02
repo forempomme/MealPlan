@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.2.1"; // v62
+const VERSION = "3.3.0"; // v63
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -154,6 +154,32 @@ function shiftWeek(key, n) {
   const d = getWeekStart(key);
   d.setDate(d.getDate() + n * 7);
   return getISOWeekKey(d);
+}
+
+// ══════════════════════════════════════════════════════
+//  MENUS CANTINE
+// ══════════════════════════════════════════════════════
+const WEEKDAY_LABELS = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+
+/** Date locale (pas UTC, pour éviter les décalages de fuseau) → 'YYYY-MM-DD' */
+function fmtISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** Les 5 jours (lundi→vendredi) de la semaine ISO donnée, en objets Date */
+function getWeekdayDates(weekKey) {
+  const start = getWeekStart(weekKey); // lundi
+  return [0, 1, 2, 3, 4].map(i => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+}
+
+/** Vérifie qu'une chaîne 'YYYY-MM-DD' est une date calendaire valide (rejette '2026-02-30' etc.) */
+function isValidISODate(str) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str || '')) return false;
+  const d = new Date(str + 'T00:00:00');
+  return !isNaN(d) && fmtISODate(d) === str;
 }
 
 /** Vérifie qu'un mot-clé correspond à un nom entier (pas une sous-chaîne d'un mot) */
@@ -337,6 +363,7 @@ function AppProvider({ children }) {
   const [shopping, setShopping] = useState(() => loadFromStorage('mp_shopping',  []));
   const [cats,     setCats]     = useState(() => loadFromStorage('mp_cats',      DEFAULT_CATS));
   const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4, householdSize: 6 }));
+  const [cantine,  setCantine]  = useState(() => loadFromStorage('mp_cantine',   []));
   const [planningTarget, setPlanningTarget] = useState(null); // weekKey cible pour navigation
 
   const [snack,    setSnack]    = useState(null);
@@ -370,6 +397,7 @@ function AppProvider({ children }) {
   useEffect(() => saveWithCheck('mp_shopping', shopping), [shopping, saveWithCheck]);
   useEffect(() => saveWithCheck('mp_cats',     cats),     [cats,     saveWithCheck]);
   useEffect(() => saveWithCheck('mp_settings', settings), [settings, saveWithCheck]);
+  useEffect(() => saveWithCheck('mp_cantine',  cantine),  [cantine,  saveWithCheck]);
 
   /* ── Recettes ── */
   const addRecipe    = d => { setRecipes(p => [{ ...d, id: genId(), createdAt: ts() }, ...p]); showSnack('✅ Recette créée'); };
@@ -639,6 +667,36 @@ function AppProvider({ children }) {
     return true;
   };
   const reorderCats = list => setCats(list.map((c, i) => ({ ...c, order: i })));
+  /* ── Menus cantine ── */
+  const upsertCantineDay = (date, data) => {
+    const hasContent = [data.entree, data.plat, data.fromage, data.dessert].some(v => v && v.trim());
+    setCantine(p => {
+      const without = p.filter(c => c.date !== date);
+      return hasContent ? [...without, { id: genId(), date, ...data }] : without;
+    });
+  };
+  const upsertCantineDays = (days) => { // import groupé (photo) : un seul setCantine pour tous les jours
+    setCantine(p => {
+      let list = p;
+      days.forEach(({ date, ...data }) => {
+        const hasContent = [data.entree, data.plat, data.fromage, data.dessert].some(v => v && v.trim());
+        list = list.filter(c => c.date !== date);
+        if (hasContent) list = [...list, { id: genId(), date, ...data }];
+      });
+      return list;
+    });
+  };
+  const deleteCantineDay = (date) => {
+    setCantine(p => p.filter(c => c.date !== date));
+    showSnack('🗑 Menu supprimé');
+  };
+  const clearCantine = () => {
+    if (!cantine.length) { showSnack('ℹ️ Aucun menu enregistré'); return; }
+    const prev = [...cantine];
+    setCantine([]);
+    showSnack(`Menus cantine vidés (${prev.length} jour${prev.length>1?'s':''})`, () => setCantine(prev));
+  };
+
   const updSettings = patch => setSettings(p => ({ ...p, ...patch }));
 
   const importAllData = (data) => {
@@ -647,15 +705,17 @@ function AppProvider({ children }) {
     if (data.shopping) setShopping(data.shopping);
     if (data.cats)     setCats(data.cats);
     if (data.settings) setSettings(data.settings);
+    if (data.cantine)  setCantine(data.cantine);
   };
 
   return (
     <AppCtx.Provider value={{
-      recipes, meals, shopping, cats, settings, snack, setSnack, showSnack,
+      recipes, meals, shopping, cats, settings, cantine, snack, setSnack, showSnack,
       addRecipe, updateRecipe, duplicateRecipe, deleteRecipe,
       addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek, reportMeals,
       addShoppingItem, deleteShoppingItem, deleteShoppingItemsByIds, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
       reorderItemsInCat, addCat, deleteCat, updateCat, addKeywordToCat, reorderCats, updSettings, importAllData,
+      upsertCantineDay, upsertCantineDays, deleteCantineDay, clearCantine,
       planningTarget, setPlanningTarget,
     }}>
       {children}
@@ -1401,7 +1461,7 @@ function PlanningTab() {
 }
 
 function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
-  const { meals, recipes, reportMeals } = useApp();
+  const { meals, recipes, reportMeals, cantine } = useApp();
   const [expanded, setExpanded] = useState(isCurrent);
   const [reportOpen, setReportOpen] = useState(false);
   const weekMeals = meals.filter(m => m.weekKey === weekKey);
@@ -1410,6 +1470,16 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
   // "Reporter" n'a de sens que pour une semaine déjà entamée (passée ou en cours) —
   // une semaine future n'a par définition aucun repas cuisiné, ce n'est pas la même chose.
   const unfinishedMeals = weekKey <= currentWeek ? weekMeals.filter(m => !m.done) : [];
+
+  // Menus cantine de la semaine (lundi→vendredi) — purement informatif, n'affiche que les jours renseignés
+  const weekCantine = useMemo(() => getWeekdayDates(weekKey).map(d => {
+    const dateStr = fmtISODate(d);
+    return {
+      date: dateStr,
+      label: `${WEEKDAY_LABELS[d.getDay()-1]} ${d.toLocaleDateString('fr-FR', { day:'numeric', month:'short' })}`,
+      entry: cantine.find(c => c.date === dateStr) || null,
+    };
+  }).filter(w => w.entry), [weekKey, cantine]);
 
   const shareWeek = () => {
     const text = `📅 Semaine ${wn} — ${getWeekRange(weekKey)}\n\n` +
@@ -1472,6 +1542,27 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
             if (!recipe && !meal.customName) return null;
             return <MealItem key={meal.id} meal={meal} recipe={recipe || null} onViewRecipe={onViewRecipe} />;
           })}
+
+          {weekCantine.length > 0 && (
+            <div style={{ background:C.planBg, border:`1px solid ${C.planBdr}`, borderRadius:10, padding:'8px 10px', marginTop:6, marginBottom:2 }}>
+              <div style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>
+                🏫 Cantine
+              </div>
+              {weekCantine.map((w, i) => (
+                <div key={w.date} style={{
+                  marginBottom: i < weekCantine.length-1 ? 6 : 0,
+                  paddingBottom: i < weekCantine.length-1 ? 6 : 0,
+                  borderBottom: i < weekCantine.length-1 ? `1px solid ${C.border}33` : 'none',
+                }}>
+                  <div style={{ fontSize:12, color:C.accent, fontWeight:600, marginBottom:2 }}>{w.label}</div>
+                  <div style={{ fontSize:12, color:C.soft, lineHeight:1.5 }}>
+                    {[w.entry.entree, w.entry.plat, w.entry.fromage, w.entry.dessert].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div style={{ display:'flex', gap:6, marginTop:6, flexWrap:'wrap' }}>
             <Btn onClick={onAdd} variant="primary" small>+ Ajouter</Btn>
             <Btn onClick={onDup} variant="ghost" small>📋</Btn>
@@ -1949,6 +2040,203 @@ function ReportMealsModal({ weekKey, unfinishedMeals, recipes, onClose, onConfir
           style={{ width:'100%', justifyContent:'center', marginTop:10 }}>
           {count === 0 ? 'Sélectionne au moins un repas' : `↷ Reporter ${count} repas`}
         </Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  MENUS CANTINE — import automatique depuis une photo
+// ══════════════════════════════════════════════════════
+
+/**
+ * Analyse une photo de menu cantine via l'API Claude (vision) et ajoute
+ * automatiquement les jours détectés. Pas d'étape de confirmation manuelle
+ * par jour — l'ajout est direct ; la correction se fait ensuite via la liste
+ * (tap sur un jour → CantineDayEditModal).
+ */
+function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
+  useBackHandler(onClose);
+  const fileRef  = useRef(null);
+  const abortRef = useRef(null);
+  const [importing,  setImporting]  = useState(false);
+  const [importStep, setImportStep] = useState('');
+  const [elapsed,    setElapsed]    = useState(0);
+  const [error,      setError]      = useState('');
+  const [result,     setResult]     = useState(null); // { count, first, last }
+
+  useEffect(() => {
+    if (!importing) { setElapsed(0); return; }
+    const id = setInterval(() => setElapsed(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [importing]);
+
+  const withTimeout = (promise, ms = 45000) => Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`Délai dépassé (${ms/1000}s)`)), ms)),
+    new Promise((_, rej) => {
+      const ctrl = abortRef.current;
+      if (!ctrl) return;
+      if (ctrl.signal.aborted) { rej(new Error('Import annulé')); return; }
+      ctrl.signal.addEventListener('abort', () => rej(new Error('Import annulé')));
+    }),
+  ]);
+
+  const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const r = reader.result || '';
+      const comma = r.indexOf(',');
+      resolve(comma >= 0 ? r.slice(comma + 1) : r);
+    };
+    reader.onerror = () => reject(new Error('Lecture du fichier impossible'));
+    reader.readAsDataURL(file);
+  });
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    abortRef.current = new AbortController();
+    setImporting(true); setError(''); setResult(null); setImportStep('📷 Lecture de la photo…');
+    try {
+      const base64    = await withTimeout(readFileAsBase64(file));
+      const mediaType = file.type || 'image/jpeg';
+      setImportStep('🤖 Analyse du menu via Claude…');
+
+      const currentYear = new Date().getFullYear();
+      const res = await withTimeout(fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 4000,
+          system: `Tu analyses une photo de menu de cantine scolaire française. La photo montre une grille hebdomadaire : chaque jour (LUNDI/MARDI/MERCREDI/JEUDI/VENDREDI) a une date (JJ/MM) et jusqu'à 4 lignes : Entrée, Plat (souvent avec féculent), Fromage/laitage, Dessert.
+Un en-tête indique généralement la période complète (ex: "DU 14 SEPTEMBRE AU 9 OCTOBRE 2026") — utilise-la pour déduire l'ANNÉE de chaque date JJ/MM. Si aucune année n'est visible, utilise ${currentYear}.
+Réponds UNIQUEMENT avec un objet JSON valide, sans markdown ni texte autour :
+{"days":[{"date":"YYYY-MM-DD","entree":"...","plat":"...","fromage":"...","dessert":"..."}]}
+- Une entrée par jour scolaire visible sur l'image (ignore les week-ends).
+- Si une catégorie est absente sur un jour donné, mets une chaîne vide "".
+- Recopie le texte tel qu'il apparaît sur l'image, sans reformuler.`,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+              { type: 'text', text: 'Extrait tous les menus visibles sur cette photo au format JSON demandé.' },
+            ],
+          }],
+        }),
+      }));
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || 'Erreur API Claude');
+      const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+      const jsonMatch = texts.replace(/^```(?:json)?\s*/im, '').replace(/\s*```\s*$/im, '').match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new SyntaxError('Aucun menu détecté dans la réponse.');
+      const parsed = JSON.parse(jsonMatch[0]);
+      const days = (parsed.days || []).filter(d => d && isValidISODate(d.date));
+      if (!days.length) throw new Error('Aucun jour valide extrait de la photo.');
+
+      upsertCantineDays(days.map(d => ({
+        date:    d.date,
+        entree:  (d.entree  || '').trim(),
+        plat:    (d.plat    || '').trim(),
+        fromage: (d.fromage || '').trim(),
+        dessert: (d.dessert || '').trim(),
+      })));
+
+      const sortedDates = [...days].map(d => d.date).sort();
+      setResult({ count: days.length, first: sortedDates[0], last: sortedDates[sortedDates.length-1] });
+      setImportStep('');
+    } catch (e) {
+      const isBadJson = e.message?.includes('JSON') || e instanceof SyntaxError;
+      setError(isBadJson
+        ? "Impossible de lire le menu sur cette photo. Essaie une photo plus nette, bien cadrée sur le tableau."
+        : (e.message || "Échec de l'import."));
+      setImportStep('');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const fmt = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
+
+  return (
+    <BottomSheet title="📷 Importer depuis une photo" onClose={onClose}>
+      <div style={{ padding:'10px 16px 24px' }}>
+        <input ref={fileRef} type="file" accept="image/*" capture="environment"
+          onChange={e => { const f = e.target.files?.[0]; e.target.value=''; handleFile(f); }}
+          style={{ display:'none' }} />
+
+        {!importing && !result && (
+          <>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:16, lineHeight:1.6 }}>
+              Prends ou choisis une photo du menu cantine (tableau hebdomadaire, jours en colonnes). L'IA analyse l'image et ajoute automatiquement les menus détectés — aucune saisie à faire.
+            </div>
+            {error && (
+              <div style={{ color:C.red, fontSize:12, lineHeight:1.6, marginBottom:12, background:C.redBg, border:`1px solid ${C.red}33`, borderRadius:9, padding:10 }}>
+                ⚠️ {error}
+              </div>
+            )}
+            <Btn onClick={() => fileRef.current?.click()} variant="primary" style={{ width:'100%', justifyContent:'center' }}>
+              📷 {error ? 'Réessayer avec une autre photo' : 'Choisir une photo'}
+            </Btn>
+          </>
+        )}
+
+        {importing && (
+          <div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, color:C.accent, fontSize:13, marginBottom:10 }}>
+              <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>⚙️</span>
+              <span style={{ flex:1 }}>{importStep || 'Analyse en cours…'}</span>
+              <span style={{ color:C.muted, fontSize:11 }}>{elapsed}s</span>
+            </div>
+            <button onClick={() => { abortRef.current?.abort(); setImporting(false); setImportStep(''); setError('Import annulé.'); }} style={{
+              width:'100%', padding:'9px', background:C.redBg, border:`1px solid ${C.red}44`,
+              color:C.red, borderRadius:9, fontSize:12, cursor:'pointer', fontFamily:'inherit',
+            }}>✕ Annuler</button>
+          </div>
+        )}
+
+        {result && !importing && (
+          <div>
+            <div style={{ color:C.green, fontSize:14, fontWeight:600, marginBottom:6 }}>
+              ✅ {result.count} jour{result.count>1?'s':''} importé{result.count>1?'s':''}
+            </div>
+            <div style={{ color:C.muted, fontSize:12, marginBottom:16, lineHeight:1.5 }}>
+              Du {fmt(result.first)} au {fmt(result.last)} · vérifie la liste ci-dessous et corrige si besoin (tap sur un jour).
+            </div>
+            <Btn onClick={onClose} variant="primary" style={{ width:'100%', justifyContent:'center' }}>Fermer</Btn>
+          </div>
+        )}
+      </div>
+    </BottomSheet>
+  );
+}
+
+/** Édition rapide d'un seul jour — correction après import photo, ou ajout ponctuel. */
+function CantineDayEditModal({ date, existing, onClose, upsertCantineDay }) {
+  const [form, setForm] = useState({
+    entree:  existing?.entree  || '',
+    plat:    existing?.plat    || '',
+    fromage: existing?.fromage || '',
+    dessert: existing?.dessert || '',
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const d = new Date(date + 'T00:00:00');
+  const inp = { padding:'9px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:14, outline:'none', width:'100%' };
+
+  const save = () => { upsertCantineDay(date, form); onClose(); };
+
+  return (
+    <BottomSheet title={`${WEEKDAY_LABELS[d.getDay()-1]} ${d.toLocaleDateString('fr-FR', { day:'numeric', month:'long' })}`} onClose={onClose}>
+      <div style={{ padding:'10px 16px 24px' }}>
+        <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Entrée</label>
+        <input value={form.entree} onChange={e=>set('entree',e.target.value)} style={{ ...inp, marginBottom:12 }} />
+        <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Plat</label>
+        <input value={form.plat} onChange={e=>set('plat',e.target.value)} style={{ ...inp, marginBottom:12 }} />
+        <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Fromage / laitage</label>
+        <input value={form.fromage} onChange={e=>set('fromage',e.target.value)} style={{ ...inp, marginBottom:12 }} />
+        <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Dessert</label>
+        <input value={form.dessert} onChange={e=>set('dessert',e.target.value)} style={{ ...inp, marginBottom:16 }} />
+        <Btn onClick={save} variant="primary" style={{ width:'100%', justifyContent:'center' }}>Enregistrer</Btn>
       </div>
     </BottomSheet>
   );
@@ -5274,13 +5562,16 @@ function KpiCard({ icon, value, label, sub, color }) {
 //  OPTIONS TAB
 // ══════════════════════════════════════════════════════
 function SettingsTab() {
-  const { cats, settings, recipes, meals, shopping, deleteCat, updSettings, importAllData, showSnack, reorderCats } = useApp();
+  const { cats, settings, recipes, meals, shopping, cantine, deleteCat, updSettings, importAllData, showSnack, reorderCats, upsertCantineDay, upsertCantineDays, deleteCantineDay, clearCantine } = useApp();
   const [editCat,  setEditCat]  = useState(null); // cat object en édition
   const [addOpen,  setAddOpen]  = useState(false);
   const [importErr, setImportErr] = useState('');
+  const [cantinePhotoOpen, setCantinePhotoOpen] = useState(false);
+  const [cantineEditDate, setCantineEditDate]   = useState(null); // date en édition manuelle
   const fileRef = useRef(null);
 
   const sorted = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
+  const sortedCantine = useMemo(() => [...cantine].sort((a,b) => a.date.localeCompare(b.date)), [cantine]);
 
   const moveCat = (id, dir) => {
     const list = [...cats].sort((a,b) => a.order - b.order);
@@ -5294,7 +5585,7 @@ function SettingsTab() {
   // ── Export JSON ──────────────────────────────────────
   const handleExport = () => {
     try {
-      const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings };
+      const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings, cantine };
       const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
@@ -5434,6 +5725,54 @@ function SettingsTab() {
         ))}
       </div>
 
+      {/* ── Menus cantine ── */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <SecTitle style={{ margin:0 }}>🏫 Menus cantine</SecTitle>
+        <Btn onClick={() => setCantinePhotoOpen(true)} variant="primary" small>📷 Importer</Btn>
+      </div>
+      <div style={{
+        background:C.accentBg, border:`1px solid ${C.accent}33`,
+        borderRadius:10, padding:'8px 12px', marginBottom:10,
+        display:'flex', gap:8, alignItems:'center',
+      }}>
+        <span style={{ fontSize:15 }}>📷</span>
+        <span style={{ fontSize:12, color:C.soft, lineHeight:1.5 }}>
+          Prends une photo du menu de l'école, l'IA l'analyse et ajoute les jours automatiquement — purement informatif, n'apparaît pas dans tes recettes, juste en rappel dans chaque semaine du Planning.
+        </span>
+      </div>
+      {sortedCantine.length === 0 ? (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16, marginBottom:16, textAlign:'center' }}>
+          <div style={{ color:C.muted, fontSize:13 }}>Aucun menu enregistré.</div>
+        </div>
+      ) : (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:'4px 0', marginBottom:10 }}>
+          {sortedCantine.map((c, idx) => {
+            const d = new Date(c.date + 'T00:00:00');
+            return (
+              <div key={c.id} style={{
+                display:'flex', alignItems:'center', gap:8, padding:'9px 12px',
+                borderBottom: idx<sortedCantine.length-1 ? `1px solid ${C.border}` : 'none',
+              }}>
+                <div onClick={() => setCantineEditDate(c.date)} style={{ flex:1, minWidth:0, cursor:'pointer' }}>
+                  <div style={{ fontWeight:500, color:C.text, fontSize:13 }}>
+                    {WEEKDAY_LABELS[d.getDay()-1]} {d.toLocaleDateString('fr-FR', { day:'numeric', month:'short' })}
+                  </div>
+                  <div style={{ fontSize:11, color:C.muted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                    {c.plat || c.entree || '—'}
+                  </div>
+                </div>
+                <button onClick={() => deleteCantineDay(c.date)} style={{
+                  background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:16, opacity:0.7, flexShrink:0,
+                }}>×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {sortedCantine.length > 0 && (
+        <Btn onClick={clearCantine} variant="danger" small style={{ marginBottom:16 }}>🗑 Tout vider</Btn>
+      )}
+
       {/* ── Sauvegarde ── */}
       <SecTitle>Sauvegarde & Restauration</SecTitle>
       <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16, marginBottom:16 }}>
@@ -5529,6 +5868,20 @@ function SettingsTab() {
       )}
       {addOpen && (
         <CategoryAddModal onClose={() => setAddOpen(false)} />
+      )}
+      {cantinePhotoOpen && (
+        <CantinePhotoImportModal
+          onClose={() => setCantinePhotoOpen(false)}
+          upsertCantineDays={upsertCantineDays}
+        />
+      )}
+      {cantineEditDate && (
+        <CantineDayEditModal
+          date={cantineEditDate}
+          existing={cantine.find(c => c.date === cantineEditDate)}
+          onClose={() => setCantineEditDate(null)}
+          upsertCantineDay={upsertCantineDay}
+        />
       )}
     </div>
   );
