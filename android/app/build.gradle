@@ -8,8 +8,8 @@ android {
         applicationId  "com.mealplan.app"
         minSdk         23
         targetSdk      34
-        versionCode    340
-        versionName    "3.4.0"
+        versionCode    341
+        versionName    "3.4.1"
     }
 
     signingConfigs {
@@ -61,4 +61,8 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     // Parser HTML pour JSON-LD, __NEXT_DATA__, Microdata
     implementation 'org.jsoup:jsoup:1.17.2'
+    // OCR local (menus cantine) — modèle EMBARQUÉ dans l'APK, zéro réseau, zéro clé API.
+    // Ne pas remplacer par com.google.android.gms:play-services-mlkit-text-recognition :
+    // cette variante télécharge son modèle via Play Services au premier usage.
+    implementation 'com.google.mlkit:text-recognition:16.0.1'
 }

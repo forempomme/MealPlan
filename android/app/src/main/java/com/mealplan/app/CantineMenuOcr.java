@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.media.ExifInterface;
+import android.os.Build;
 
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.Text;
@@ -60,14 +61,20 @@ public class CantineMenuOcr {
         Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
         if (bitmap == null) return null;
         int rotation = 0;
-        try {
-            ExifInterface exif = new ExifInterface(new ByteArrayInputStream(bytes));
-            int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
-            if (orientation == ExifInterface.ORIENTATION_ROTATE_90)  rotation = 90;
-            else if (orientation == ExifInterface.ORIENTATION_ROTATE_180) rotation = 180;
-            else if (orientation == ExifInterface.ORIENTATION_ROTATE_270) rotation = 270;
-        } catch (Exception ignored) {
-            // Pas d'EXIF lisible → on suppose l'image déjà dans le bon sens
+        // ExifInterface(InputStream) exige l'API 24 ; le projet cible minSdk 23.
+        // En-dessous, on saute la correction de rotation plutôt que de planter
+        // (NoSuchMethodError est une Error, pas une Exception — un try/catch
+        // classique ne l'aurait pas rattrapée).
+        if (Build.VERSION.SDK_INT >= 24) {
+            try {
+                ExifInterface exif = new ExifInterface(new ByteArrayInputStream(bytes));
+                int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+                if (orientation == ExifInterface.ORIENTATION_ROTATE_90)  rotation = 90;
+                else if (orientation == ExifInterface.ORIENTATION_ROTATE_180) rotation = 180;
+                else if (orientation == ExifInterface.ORIENTATION_ROTATE_270) rotation = 270;
+            } catch (Exception ignored) {
+                // Pas d'EXIF lisible → on suppose l'image déjà dans le bon sens
+            }
         }
         if (rotation == 0) return bitmap;
         Matrix m = new Matrix();
