@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -12,11 +13,34 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
+
+    // Callback JS en attente d'un fichier choisi (input type="file" dans la WebView).
+    // onShowFileChooser() le stocke, le launcher ci-dessous le résout une fois l'activité
+    // de sélection terminée — doit être enregistré avant que l'Activity ne soit STARTED,
+    // d'où le champ initialisé directement (pattern standard androidx.activity).
+    private ValueCallback<Uri[]> filePathCallback;
+
+    private final ActivityResultLauncher<Intent> fileChooserLauncher = registerForActivityResult(
+        new ActivityResultContracts.StartActivityForResult(),
+        result -> {
+            if (filePathCallback == null) return;
+            Uri[] uris = null;
+            if (result.getResultCode() == RESULT_OK
+                    && result.getData() != null
+                    && result.getData().getData() != null) {
+                uris = new Uri[]{ result.getData().getData() };
+            }
+            filePathCallback.onReceiveValue(uris); // null = annulé, WebView gère ce cas proprement
+            filePathCallback = null;
+        }
+    );
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -66,7 +90,27 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                // Une sélection précédente non résolue (rare, mais évite de perdre le callback JS) :
+                // on l'annule proprement avant d'en accepter une nouvelle.
+                if (filePathCallback != null) filePathCallback.onReceiveValue(null);
+                filePathCallback = callback;
+                try {
+                    // createIntent() construit l'intent ACTION_GET_CONTENT à partir de l'attribut
+                    // accept="image/*" du <input> JS — pas besoin de le reconstruire à la main.
+                    // Sur un Pixel 8 (Camera stock Google), le chooser système propose nativement
+                    // Appareil photo + Galerie/Fichiers pour ce type d'intent.
+                    fileChooserLauncher.launch(params.createIntent());
+                } catch (Exception e) {
+                    filePathCallback.onReceiveValue(null);
+                    filePathCallback = null;
+                    return false;
+                }
+                return true;
+            }
+        });
         webView.addJavascriptInterface(new Bridge(), "Android");
         webView.loadUrl("file:///android_asset/index.html");
     }

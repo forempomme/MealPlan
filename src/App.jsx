@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.3.0"; // v63
+const VERSION = "3.3.1"; // v64
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -2161,9 +2161,9 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans markdown ni texte autour :
   return (
     <BottomSheet title="📷 Importer depuis une photo" onClose={onClose}>
       <div style={{ padding:'10px 16px 24px' }}>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment"
+        <input ref={fileRef} type="file" accept="image/*"
           onChange={e => { const f = e.target.files?.[0]; e.target.value=''; handleFile(f); }}
-          style={{ display:'none' }} />
+          style={{ position:'absolute', width:1, height:1, padding:0, margin:-1, overflow:'hidden', opacity:0, pointerEvents:'none' }} />
 
         {!importing && !result && (
           <>
@@ -2175,7 +2175,10 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans markdown ni texte autour :
                 ⚠️ {error}
               </div>
             )}
-            <Btn onClick={() => fileRef.current?.click()} variant="primary" style={{ width:'100%', justifyContent:'center' }}>
+            <Btn onClick={() => {
+              try { fileRef.current?.click(); }
+              catch (e) { setError(`Impossible d'ouvrir le sélecteur de fichier (${e.message || 'erreur inconnue'}).`); }
+            }} variant="primary" style={{ width:'100%', justifyContent:'center' }}>
               📷 {error ? 'Réessayer avec une autre photo' : 'Choisir une photo'}
             </Btn>
           </>
