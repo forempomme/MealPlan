@@ -20,6 +20,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -87,12 +88,13 @@ public class CantineMenuOcr {
     // ══════════════════════════════════════════════════════
     public static void analyze(Bitmap bitmap, Callback callback) {
         try {
+            final int imageWidth = bitmap.getWidth();
             InputImage image = InputImage.fromBitmap(bitmap, 0);
             TextRecognizer recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
             recognizer.process(image)
                 .addOnSuccessListener(text -> {
                     try {
-                        callback.onResult(buildResult(text));
+                        callback.onResult(buildResult(text, imageWidth));
                     } catch (Exception e) {
                         callback.onResult(error("Analyse impossible : " + safeMsg(e)));
                     }
@@ -122,7 +124,7 @@ public class CantineMenuOcr {
     // ══════════════════════════════════════════════════════
     //  RECONSTRUCTION DE LA GRILLE
     // ══════════════════════════════════════════════════════
-    private static String buildResult(Text text) throws JSONException {
+    private static String buildResult(Text text, int imageWidth) throws JSONException {
         // 1. Aplatit tous les blocs OCR en liste de lignes avec position
         List<OcrLine> lines = new ArrayList<>();
         for (Text.TextBlock block : text.getTextBlocks()) {
@@ -163,6 +165,15 @@ public class CantineMenuOcr {
         }
         if (headers.isEmpty()) return error("Aucun jour détecté (en-têtes LUNDI/MARDI/… introuvables sur cette photo).");
 
+        // 3bis. Hauteur de ligne "typique" (médiane) : sert à décider si deux lignes de
+        // contenu consécutives sont UN SEUL item coupé par un retour à la ligne visuel
+        // (ex: "Pâtes à" + "la bolognaise végétarienne" → un seul plat) ou DEUX catégories
+        // distinctes. ML Kit renvoie une Line par ligne VISUELLE, pas par item — sans ça,
+        // un plat qui prend 2 lignes dans la colonne étroite décale toutes les catégories
+        // suivantes de ce jour-là.
+        int typicalLineHeight = medianHeight(contentLines);
+        int paragraphGapThreshold = Math.max(4, (int) (typicalLineHeight * 0.6));
+
         // 4. Regroupe les en-têtes en lignes de semaine par proximité verticale
         headers.sort(Comparator.comparingInt(h -> h.rect.top));
         int avgHeaderHeight = 0;
@@ -183,22 +194,33 @@ public class CantineMenuOcr {
         }
         if (!current.isEmpty()) weekRows.add(current);
 
-        // 5. Pour chaque semaine : borne les colonnes (X) et la bande verticale (Y),
-        //    puis assigne chaque ligne de contenu à sa cellule (semaine, colonne).
+        // 5. Pour chaque semaine : borne les colonnes (X, plafonnées — si un jour n'a pas
+        //    été détecté comme en-tête, son contenu ne doit pas se déverser sans limite
+        //    dans la colonne voisine) et la bande verticale (Y), regroupe les lignes de
+        //    contenu en paragraphes, puis assigne jusqu'à 4 par jour.
         JSONArray days = new JSONArray();
         for (int wi = 0; wi < weekRows.size(); wi++) {
             List<DayHeader> row = weekRows.get(wi);
             row.sort(Comparator.comparingInt(h -> h.rect.left));
 
-            int rowTop = Integer.MAX_VALUE;
-            for (DayHeader h : row) rowTop = Math.min(rowTop, h.rect.top);
             int rowBottom = (wi + 1 < weekRows.size()) ? minTop(weekRows.get(wi + 1)) : Integer.MAX_VALUE;
+
+            // Largeur de colonne "typique" de cette semaine, pour plafonner les bornes
+            // extrêmes — repli sur image/5 si une seule colonne a été détectée sur la ligne.
+            int avgColWidth = imageWidth / 5;
+            if (row.size() >= 2) {
+                int span = row.get(row.size() - 1).rect.left - row.get(0).rect.left;
+                avgColWidth = Math.max(span / (row.size() - 1), imageWidth / 10);
+            }
+            int maxOverhang = (int) (avgColWidth * 1.3);
 
             for (int ci = 0; ci < row.size(); ci++) {
                 DayHeader h = row.get(ci);
-                int leftBound  = (ci == 0) ? Integer.MIN_VALUE
+                int leftBound  = (ci == 0)
+                    ? Math.max(0, h.rect.left - maxOverhang)
                     : (row.get(ci - 1).rect.right + h.rect.left) / 2;
-                int rightBound = (ci == row.size() - 1) ? Integer.MAX_VALUE
+                int rightBound = (ci == row.size() - 1)
+                    ? Math.min(imageWidth, h.rect.right + maxOverhang)
                     : (h.rect.right + row.get(ci + 1).rect.left) / 2;
 
                 List<OcrLine> cell = new ArrayList<>();
@@ -211,10 +233,12 @@ public class CantineMenuOcr {
                 }
                 cell.sort(Comparator.comparingInt(l -> l.rect.top));
 
-                String entree  = cell.size() > 0 ? cell.get(0).text : "";
-                String plat    = cell.size() > 1 ? cell.get(1).text : "";
-                String fromage = cell.size() > 2 ? cell.get(2).text : "";
-                String dessert = cell.size() > 3 ? cell.get(3).text : "";
+                List<String> paragraphs = mergeWrappedLines(cell, paragraphGapThreshold);
+
+                String entree  = paragraphs.size() > 0 ? paragraphs.get(0) : "";
+                String plat    = paragraphs.size() > 1 ? paragraphs.get(1) : "";
+                String fromage = paragraphs.size() > 2 ? paragraphs.get(2) : "";
+                String dessert = paragraphs.size() > 3 ? paragraphs.get(3) : "";
 
                 String date = String.format("%04d-%02d-%02d", year, h.month, h.day);
                 JSONObject d = new JSONObject();
@@ -236,6 +260,36 @@ public class CantineMenuOcr {
         int m = Integer.MAX_VALUE;
         for (DayHeader h : row) m = Math.min(m, h.rect.top);
         return m;
+    }
+
+    /**
+     * Fusionne les lignes OCR consécutives d'une cellule en paragraphes : un petit écart
+     * vertical entre deux lignes (≤ gapThreshold) = retour à la ligne du même item, un
+     * écart plus large = nouvelle catégorie (entrée/plat/fromage/dessert).
+     */
+    private static List<String> mergeWrappedLines(List<OcrLine> cellLines, int gapThreshold) {
+        List<String> paragraphs = new ArrayList<>();
+        StringBuilder current = null;
+        int prevBottom = Integer.MIN_VALUE;
+        for (OcrLine l : cellLines) {
+            if (current != null && (l.rect.top - prevBottom) <= gapThreshold) {
+                current.append(' ').append(l.text);
+            } else {
+                if (current != null) paragraphs.add(current.toString());
+                current = new StringBuilder(l.text);
+            }
+            prevBottom = l.rect.bottom;
+        }
+        if (current != null) paragraphs.add(current.toString());
+        return paragraphs;
+    }
+
+    private static int medianHeight(List<OcrLine> lines) {
+        if (lines.isEmpty()) return 20; // repli raisonnable si aucune ligne de contenu
+        List<Integer> heights = new ArrayList<>();
+        for (OcrLine l : lines) heights.add(l.rect.height());
+        Collections.sort(heights);
+        return heights.get(heights.size() / 2);
     }
 
     private static String safeMsg(Exception e) {
