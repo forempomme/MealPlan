@@ -163,7 +163,12 @@ public class CantineMenuOcr {
             }
             if (!matched) contentLines.add(l);
         }
-        if (headers.isEmpty()) return error("Aucun jour détecté (en-têtes LUNDI/MARDI/… introuvables sur cette photo).");
+        if (headers.isEmpty()) {
+            JSONObject err = new JSONObject();
+            err.put("error", "Aucun jour détecté (en-têtes LUNDI/MARDI/… introuvables sur cette photo).");
+            err.put("raw", buildRawDump(lines, imageWidth));
+            return err.toString();
+        }
 
         // 3bis. Hauteur de ligne "typique" (médiane) : sert à décider si deux lignes de
         // contenu consécutives sont UN SEUL item coupé par un retour à la ligne visuel
@@ -253,7 +258,28 @@ public class CantineMenuOcr {
 
         JSONObject out = new JSONObject();
         out.put("days", days);
+        out.put("raw", buildRawDump(lines, imageWidth)); // texte brut détecté, pour diagnostic
         return out.toString();
+    }
+
+    /**
+     * Dump de toutes les lignes OCR brutes (texte + position), triées comme sur la
+     * photo (haut→bas, gauche→droite). Permet de voir EXACTEMENT ce que l'OCR a lu,
+     * indépendamment de l'heuristique de reconstruction de grille ci-dessus — utile
+     * pour diagnostiquer un problème d'extraction sans deviner à l'aveugle.
+     */
+    private static JSONArray buildRawDump(List<OcrLine> lines, int imageWidth) throws JSONException {
+        List<OcrLine> sorted = new ArrayList<>(lines);
+        sorted.sort(Comparator.<OcrLine>comparingInt(l -> l.rect.top / 20).thenComparingInt(l -> l.rect.left));
+        JSONArray raw = new JSONArray();
+        for (OcrLine l : sorted) {
+            JSONObject o = new JSONObject();
+            o.put("text", l.text);
+            o.put("top", l.rect.top);
+            o.put("left", l.rect.left);
+            raw.put(o);
+        }
+        return raw;
     }
 
     private static int minTop(List<DayHeader> row) {

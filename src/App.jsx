@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.4.2"; // v67
+const VERSION = "3.5.1"; // v69
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -2059,6 +2059,7 @@ function ReportMealsModal({ weekKey, unfinishedMeals, recipes, onClose, onConfir
  */
 function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
   useBackHandler(onClose);
+  const { showSnack } = useApp();
   const fileRef  = useRef(null);
   const abortRef = useRef(null);
   const [importing,  setImporting]  = useState(false);
@@ -2066,6 +2067,8 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
   const [elapsed,    setElapsed]    = useState(0);
   const [error,      setError]      = useState('');
   const [result,     setResult]     = useState(null); // { count, first, last }
+  const [rawDump,    setRawDump]    = useState(null); // texte brut OCR, pour diagnostic
+  const [rawOpen,    setRawOpen]    = useState(false);
 
   useEffect(() => {
     if (!importing) { setElapsed(0); return; }
@@ -2097,6 +2100,9 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
 
   // Pont vers Android.analyzeCantinePhoto (OCR local ML Kit, zéro réseau) — même
   // pattern callback que fetchViaAndroid/importRecipe, mais totalement indépendant.
+  // Résout TOUJOURS (jamais de reject ici) : même un résultat en erreur peut porter
+  // un champ `raw` (texte brut OCR) précieux pour diagnostiquer — un reject avec
+  // juste un message le ferait perdre. L'appelant vérifie data.error lui-même.
   const analyzeCantinePhotoNative = (base64) => new Promise((resolve, reject) => {
     if (!window.Android?.analyzeCantinePhoto) {
       reject(new Error("Pont Android indisponible — la reconnaissance de texte n'est pas câblée dans cette build."));
@@ -2104,22 +2110,24 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
     }
     const cbId = 'mp_cantine_' + Date.now();
     window.__mpCantineOCR = window.__mpCantineOCR || {};
-    window.__mpCantineOCR[cbId] = (result) => {
-      if (result?.error) reject(new Error(result.error));
-      else resolve(result);
-    };
+    window.__mpCantineOCR[cbId] = (result) => resolve(result);
     window.Android.analyzeCantinePhoto(base64, cbId);
   });
 
   const handleFile = async (file) => {
     if (!file) return;
     abortRef.current = new AbortController();
-    setImporting(true); setError(''); setResult(null); setImportStep('📷 Lecture de la photo…');
+    setImporting(true); setError(''); setResult(null); setRawDump(null); setRawOpen(false);
+    setImportStep('📷 Lecture de la photo…');
     try {
       const base64 = await withTimeout(readFileAsBase64(file));
       setImportStep('🔎 Reconnaissance de texte (local, hors-ligne)…');
 
       const data = await withTimeout(analyzeCantinePhotoNative(base64), 20000);
+      if (data.raw) setRawDump(data.raw); // conservé que l'import réussisse ou non
+
+      if (data.error) throw new Error(data.error);
+
       const days = (data.days || []).filter(d => d && isValidISODate(d.date));
       if (!days.length) throw new Error('Aucun jour valide extrait de la photo.');
 
@@ -2140,6 +2148,15 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
     } finally {
       setImporting(false);
     }
+  };
+
+  const copyRawDump = () => {
+    if (!rawDump?.length) return;
+    const text = rawDump.map(l => `[top=${l.top} left=${l.left}] ${l.text}`).join('\n');
+    navigator.clipboard?.writeText(text).then(
+      () => showSnack('📋 Texte brut copié'),
+      () => showSnack('❌ Copie impossible sur cet appareil — fais une capture d\u2019écran du bloc ci-dessous à la place')
+    );
   };
 
   const fmt = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
@@ -2167,6 +2184,7 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
             }} variant="primary" style={{ width:'100%', justifyContent:'center' }}>
               📷 {error ? 'Réessayer avec une autre photo' : 'Choisir une photo'}
             </Btn>
+            <RawDumpDebug rawDump={rawDump} rawOpen={rawOpen} setRawOpen={setRawOpen} onCopy={copyRawDump} />
           </>
         )}
 
@@ -2193,10 +2211,46 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
               Du {fmt(result.first)} au {fmt(result.last)} · vérifie la liste ci-dessous et corrige si besoin (tap sur un jour).
             </div>
             <Btn onClick={onClose} variant="primary" style={{ width:'100%', justifyContent:'center' }}>Fermer</Btn>
+            <RawDumpDebug rawDump={rawDump} rawOpen={rawOpen} setRawOpen={setRawOpen} onCopy={copyRawDump} />
           </div>
         )}
       </div>
     </BottomSheet>
+  );
+}
+
+/**
+ * Bloc dépliable affichant le texte brut OCR tel quel (texte + position), pour
+ * diagnostiquer un résultat inattendu sans deviner. Visible aussi bien quand
+ * l'import échoue que quand il réussit mais produit un résultat suspect.
+ */
+function RawDumpDebug({ rawDump, rawOpen, setRawOpen, onCopy }) {
+  if (!rawDump?.length) return null;
+  return (
+    <div style={{ marginTop:14 }}>
+      <button onClick={() => setRawOpen(v => !v)} style={{
+        width:'100%', textAlign:'left', background:'none', border:'none',
+        color:C.muted, fontSize:11, cursor:'pointer', padding:0, fontFamily:'inherit',
+      }}>
+        {rawOpen ? '▲' : '▼'} 🪲 Texte brut détecté ({rawDump.length} lignes) — diagnostic
+      </button>
+      {rawOpen && (
+        <div style={{ marginTop:8 }}>
+          <div style={{
+            maxHeight:220, overflowY:'auto', background:C.bg, border:`1px solid ${C.border}`,
+            borderRadius:9, padding:10, fontFamily:'monospace', fontSize:11, color:C.soft, lineHeight:1.6,
+          }}>
+            {rawDump.map((l, i) => (
+              <div key={i}>[{l.top}] {l.text}</div>
+            ))}
+          </div>
+          <button onClick={onCopy} style={{
+            marginTop:6, width:'100%', padding:'7px', background:C.border, border:'none',
+            color:C.soft, borderRadius:8, fontSize:11, cursor:'pointer', fontFamily:'inherit',
+          }}>📋 Copier (pour me l'envoyer)</button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -5548,19 +5602,135 @@ function KpiCard({ icon, value, label, sub, color }) {
 }
 
 // ══════════════════════════════════════════════════════
-//  OPTIONS TAB
+//  OPTIONS TAB — menu liste + navigation par section
 // ══════════════════════════════════════════════════════
-function SettingsTab() {
-  const { cats, settings, recipes, meals, shopping, cantine, deleteCat, updSettings, importAllData, showSnack, reorderCats, upsertCantineDay, upsertCantineDays, deleteCantineDay, clearCantine } = useApp();
-  const [editCat,  setEditCat]  = useState(null); // cat object en édition
-  const [addOpen,  setAddOpen]  = useState(false);
-  const [importErr, setImportErr] = useState('');
-  const [cantinePhotoOpen, setCantinePhotoOpen] = useState(false);
-  const [cantineEditDate, setCantineEditDate]   = useState(null); // date en édition manuelle
-  const fileRef = useRef(null);
+function SettingsSectionShell({ title, onBack, children }) {
+  useBackHandler(onBack);
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:500, background:C.bg, overflowY:'auto', animation:'fadeIn 0.18s' }}>
+      <div style={{
+        background:C.card, borderBottom:`1px solid ${C.border}`,
+        padding:'9px 14px', display:'flex', alignItems:'center', gap:10,
+        position:'sticky', top:0, zIndex:10,
+      }}>
+        <Btn onClick={onBack} small>← Retour</Btn>
+        <span style={{ fontWeight:700, color:C.text, fontSize:15 }}>{title}</span>
+      </div>
+      <div style={{ padding:16 }}>{children}</div>
+    </div>
+  );
+}
 
+const SETTINGS_SECTION_TITLES = {
+  planning:   '📅 Vue du planning',
+  foyer:      '👥 Taille du foyer',
+  categories: '🛒 Catégories de courses',
+  cantine:    '🏫 Menus cantine',
+  sauvegarde: '💾 Sauvegarde & Restauration',
+  apropos:    'ℹ️ À propos',
+};
+
+function SettingsTab() {
+  const { settings, cats, cantine } = useApp();
+  const [activeSection, setActiveSection] = useState(null);
+
+  const weeksLabel = (settings.weeksToShow || 0) === 0 ? 'vue annuelle' : `${settings.weeksToShow} semaines`;
+  const rows = [
+    { id:'planning',   emoji:'📅', title:'Vue du planning',          desc:`Actuellement : ${weeksLabel}` },
+    { id:'foyer',      emoji:'👥', title:'Taille du foyer',           desc:`${settings.householdSize || 6} personnes par défaut` },
+    { id:'categories', emoji:'🛒', title:'Catégories de courses',    desc:`${cats.length} catégorie${cats.length!==1?'s':''} · ordre, mots-clés` },
+    { id:'cantine',    emoji:'🏫', title:'Menus cantine',             desc: cantine.length ? `${cantine.length} jour${cantine.length!==1?'s':''} enregistré${cantine.length!==1?'s':''}` : 'Aucun menu enregistré' },
+    { id:'sauvegarde', emoji:'💾', title:'Sauvegarde & Restauration', desc:'Export et import JSON complet' },
+    { id:'apropos',    emoji:'ℹ️', title:'À propos',                  desc:`Version ${VERSION} · historique des changements` },
+  ];
+
+  if (activeSection) {
+    return (
+      <SettingsSectionShell title={SETTINGS_SECTION_TITLES[activeSection]} onBack={() => setActiveSection(null)}>
+        {activeSection === 'planning'   && <SettingsPlanningSection />}
+        {activeSection === 'foyer'      && <SettingsFoyerSection />}
+        {activeSection === 'categories' && <SettingsCategoriesSection />}
+        {activeSection === 'cantine'    && <SettingsCantineSection />}
+        {activeSection === 'sauvegarde' && <SettingsBackupSection />}
+        {activeSection === 'apropos'    && <SettingsAboutSection />}
+      </SettingsSectionShell>
+    );
+  }
+
+  return (
+    <div style={{ padding:16 }}>
+      {rows.map(s => (
+        <button key={s.id} onClick={() => setActiveSection(s.id)} style={{
+          display:'flex', alignItems:'center', gap:12, width:'100%',
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:14,
+          padding:'14px', marginBottom:10, cursor:'pointer', textAlign:'left', fontFamily:'inherit',
+        }}>
+          <span style={{ fontSize:24, flexShrink:0 }}>{s.emoji}</span>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontWeight:600, color:C.text, fontSize:14 }}>{s.title}</div>
+            <div style={{ fontSize:12, color:C.muted, marginTop:2, lineHeight:1.4, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.desc}</div>
+          </div>
+          <span style={{ color:C.muted, fontSize:20, flexShrink:0 }}>›</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SettingsPlanningSection() {
+  const { settings, updSettings } = useApp();
+  return (
+    <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+      {[
+        { v:0,  l:'📅 Vue annuelle' },
+        { v:4,  l:'4 sem.' },
+        { v:8,  l:'8 sem.' },
+        { v:13, l:'13 sem.' },
+      ].map(({ v, l }) => {
+        const active = (settings.weeksToShow || 0) === v;
+        return (
+          <button key={v} onClick={() => updSettings({ weeksToShow: v })} style={{
+            background: active ? C.accentBg : C.border,
+            color:      active ? C.accent   : C.muted,
+            border:     active ? `1px solid ${C.accent}44` : '1px solid transparent',
+            borderRadius:20, padding:'6px 14px', fontSize:12,
+            cursor:'pointer', fontWeight: active ? 700 : 400,
+          }}>{active && '✓ '}{l}</button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SettingsFoyerSection() {
+  const { settings, updSettings } = useApp();
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+      <span style={{ fontSize:13, color:C.muted, flex:1 }}>
+        Nombre de personnes par défaut pour les repas planifiés
+      </span>
+      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+        <button onClick={() => updSettings({ householdSize: Math.max(1, (settings.householdSize||6) - 1) })} style={{
+          background:C.border, border:'none', color:C.text,
+          width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
+        }}>−</button>
+        <span style={{ fontWeight:700, fontSize:18, color:C.accent, minWidth:28, textAlign:'center' }}>
+          {settings.householdSize || 6}
+        </span>
+        <button onClick={() => updSettings({ householdSize: Math.min(20, (settings.householdSize||6) + 1) })} style={{
+          background:C.border, border:'none', color:C.text,
+          width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
+        }}>+</button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsCategoriesSection() {
+  const { cats, deleteCat, reorderCats } = useApp();
+  const [editCat, setEditCat] = useState(null);
+  const [addOpen, setAddOpen] = useState(false);
   const sorted = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
-  const sortedCantine = useMemo(() => [...cantine].sort((a,b) => a.date.localeCompare(b.date)), [cantine]);
 
   const moveCat = (id, dir) => {
     const list = [...cats].sort((a,b) => a.order - b.order);
@@ -5571,94 +5741,9 @@ function SettingsTab() {
     reorderCats(list);
   };
 
-  // ── Export JSON ──────────────────────────────────────
-  const handleExport = () => {
-    try {
-      const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings, cantine };
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = `meal-plan-${new Date().toISOString().slice(0,10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showSnack('✅ Sauvegarde exportée');
-    } catch(e) {
-      showSnack(`❌ Export impossible · ${e.message}`);
-    }
-  };
-
-  // ── Import JSON ──────────────────────────────────────
-  const handleImportFile = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const data = JSON.parse(ev.target.result);
-        if (!data.recipes && !data.cats) throw new Error('format invalide');
-        importAllData(data);
-        showSnack('✅ Données restaurées avec succès');
-        setImportErr('');
-      } catch(e) {
-        setImportErr('Fichier JSON invalide ou corrompu.');
-        showSnack(`❌ Restauration impossible · ${e.message}`);
-      }
-    };
-    reader.onerror = () => showSnack('❌ Impossible de lire le fichier');
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
   return (
-    <div style={{ padding:16 }}>
-
-      {/* ── Planning ── */}
-      <SecTitle>Vue du planning</SecTitle>
-      <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:16 }}>
-        {[
-          { v:0,  l:'📅 Vue annuelle' },
-          { v:4,  l:'4 sem.' },
-          { v:8,  l:'8 sem.' },
-          { v:13, l:'13 sem.' },
-        ].map(({ v, l }) => {
-          const active = (settings.weeksToShow || 0) === v;
-          return (
-            <button key={v} onClick={() => updSettings({ weeksToShow: v })} style={{
-              background: active ? C.accentBg : C.border,
-              color:      active ? C.accent   : C.muted,
-              border:     active ? `1px solid ${C.accent}44` : '1px solid transparent',
-              borderRadius:20, padding:'6px 14px', fontSize:12,
-              cursor:'pointer', fontWeight: active ? 700 : 400,
-            }}>{active && '✓ '}{l}</button>
-          );
-        })}
-      </div>
-
-      {/* ── Taille du foyer ── */}
-      <SecTitle>Taille du foyer</SecTitle>
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
-        <span style={{ fontSize:13, color:C.muted, flex:1 }}>
-          Nombre de personnes par défaut pour les repas planifiés
-        </span>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <button onClick={() => updSettings({ householdSize: Math.max(1, (settings.householdSize||6) - 1) })} style={{
-            background:C.border, border:'none', color:C.text,
-            width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
-          }}>−</button>
-          <span style={{ fontWeight:700, fontSize:18, color:C.accent, minWidth:28, textAlign:'center' }}>
-            {settings.householdSize || 6}
-          </span>
-          <button onClick={() => updSettings({ householdSize: Math.min(20, (settings.householdSize||6) + 1) })} style={{
-            background:C.border, border:'none', color:C.text,
-            width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
-          }}>+</button>
-        </div>
-      </div>
-
-      {/* ── Catégories ── */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <SecTitle style={{ margin:0 }}>Catégories de courses</SecTitle>
+    <>
+      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
         <Btn onClick={() => setAddOpen(true)} variant="primary" small>+ Nouvelle</Btn>
       </div>
       <div style={{
@@ -5671,7 +5756,7 @@ function SettingsTab() {
           Glisse ≡ ou utilise ▲▼ pour définir l'ordre des rayons — il s'applique automatiquement dans la liste de courses.
         </span>
       </div>
-      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:'4px 0', marginBottom:16 }}>
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:'4px 0' }}>
         {sorted.map((cat, idx) => (
           <div key={cat.id}
             style={{
@@ -5686,7 +5771,6 @@ function SettingsTab() {
                 {cat.kw?.length > 0 ? cat.kw.slice(0,5).join(', ') + (cat.kw.length > 5 ? '…' : '') : 'Aucun mot-clé'}
               </div>
             </div>
-            {/* Boutons ↑↓ */}
             <div style={{ display:'flex', flexDirection:'column', gap:2, flexShrink:0 }}>
               <button onClick={() => moveCat(cat.id, -1)} disabled={idx===0} style={{
                 background: idx===0 ? 'transparent' : C.border, border:'none',
@@ -5713,10 +5797,25 @@ function SettingsTab() {
           </div>
         ))}
       </div>
+      {editCat && (
+        <CategoryEditModal cat={editCat} onClose={() => setEditCat(null)} />
+      )}
+      {addOpen && (
+        <CategoryAddModal onClose={() => setAddOpen(false)} />
+      )}
+    </>
+  );
+}
 
-      {/* ── Menus cantine ── */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <SecTitle style={{ margin:0 }}>🏫 Menus cantine</SecTitle>
+function SettingsCantineSection() {
+  const { cantine, upsertCantineDay, upsertCantineDays, deleteCantineDay, clearCantine } = useApp();
+  const [cantinePhotoOpen, setCantinePhotoOpen] = useState(false);
+  const [cantineEditDate,  setCantineEditDate]  = useState(null);
+  const sortedCantine = useMemo(() => [...cantine].sort((a,b) => a.date.localeCompare(b.date)), [cantine]);
+
+  return (
+    <>
+      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
         <Btn onClick={() => setCantinePhotoOpen(true)} variant="primary" small>📷 Importer</Btn>
       </div>
       <div style={{
@@ -5759,45 +5858,105 @@ function SettingsTab() {
         </div>
       )}
       {sortedCantine.length > 0 && (
-        <Btn onClick={clearCantine} variant="danger" small style={{ marginBottom:16 }}>🗑 Tout vider</Btn>
+        <Btn onClick={clearCantine} variant="danger" small>🗑 Tout vider</Btn>
       )}
+      {cantinePhotoOpen && (
+        <CantinePhotoImportModal
+          onClose={() => setCantinePhotoOpen(false)}
+          upsertCantineDays={upsertCantineDays}
+        />
+      )}
+      {cantineEditDate && (
+        <CantineDayEditModal
+          date={cantineEditDate}
+          existing={cantine.find(c => c.date === cantineEditDate)}
+          onClose={() => setCantineEditDate(null)}
+          upsertCantineDay={upsertCantineDay}
+        />
+      )}
+    </>
+  );
+}
 
-      {/* ── Sauvegarde ── */}
-      <SecTitle>Sauvegarde & Restauration</SecTitle>
-      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16, marginBottom:16 }}>
-        <div style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.6 }}>
-          Exportez toutes vos données (recettes, planning, courses, catégories) dans un fichier JSON. Vous pourrez les restaurer à tout moment.
-        </div>
-        <div style={{ display:'flex', gap:8 }}>
-          <Btn onClick={handleExport} variant="primary" style={{ flex:1, justifyContent:'center' }}>
-            📤 Exporter
-          </Btn>
-          <Btn onClick={() => fileRef.current?.click()} variant="default" style={{ flex:1, justifyContent:'center' }}>
-            📥 Importer
-          </Btn>
-          <input ref={fileRef} type="file" accept=".json,application/json" onChange={handleImportFile} style={{ display:'none' }} />
-        </div>
-        {importErr && (
-          <div style={{ marginTop:10, color:C.red, fontSize:12 }}>⚠️ {importErr}</div>
-        )}
-        <div style={{ marginTop:12, fontSize:11, color:C.muted, lineHeight:1.6 }}>
-          {recipes.length} recette{recipes.length!==1?'s':''} · {meals.length} repas · {shopping.length} article{shopping.length!==1?'s':''} · {cats.length} catégorie{cats.length!==1?'s':''}
-        </div>
+function SettingsBackupSection() {
+  const { recipes, meals, shopping, cats, settings, cantine, importAllData, showSnack } = useApp();
+  const [importErr, setImportErr] = useState('');
+  const fileRef = useRef(null);
+
+  const handleExport = () => {
+    try {
+      const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings, cantine };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `meal-plan-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showSnack('✅ Sauvegarde exportée');
+    } catch(e) {
+      showSnack(`❌ Export impossible · ${e.message}`);
+    }
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data.recipes && !data.cats) throw new Error('format invalide');
+        importAllData(data);
+        showSnack('✅ Données restaurées avec succès');
+        setImportErr('');
+      } catch(e) {
+        setImportErr('Fichier JSON invalide ou corrompu.');
+        showSnack(`❌ Restauration impossible · ${e.message}`);
+      }
+    };
+    reader.onerror = () => showSnack('❌ Impossible de lire le fichier');
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16 }}>
+      <div style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.6 }}>
+        Exportez toutes vos données (recettes, planning, courses, catégories) dans un fichier JSON. Vous pourrez les restaurer à tout moment.
       </div>
+      <div style={{ display:'flex', gap:8 }}>
+        <Btn onClick={handleExport} variant="primary" style={{ flex:1, justifyContent:'center' }}>
+          📤 Exporter
+        </Btn>
+        <Btn onClick={() => fileRef.current?.click()} variant="default" style={{ flex:1, justifyContent:'center' }}>
+          📥 Importer
+        </Btn>
+        <input ref={fileRef} type="file" accept=".json,application/json" onChange={handleImportFile} style={{ display:'none' }} />
+      </div>
+      {importErr && (
+        <div style={{ marginTop:10, color:C.red, fontSize:12 }}>⚠️ {importErr}</div>
+      )}
+      <div style={{ marginTop:12, fontSize:11, color:C.muted, lineHeight:1.6 }}>
+        {recipes.length} recette{recipes.length!==1?'s':''} · {meals.length} repas · {shopping.length} article{shopping.length!==1?'s':''} · {cats.length} catégorie{cats.length!==1?'s':''}
+      </div>
+    </div>
+  );
+}
 
-      {/* ── À propos ── */}
-      <SecTitle>À propos</SecTitle>
-      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-          <span style={{ fontWeight:800, fontSize:17, color:C.text }}>🍽 Meal Plan</span>
-          <span style={{ background:C.accentBg, color:C.accent, fontSize:13, fontWeight:700, padding:'4px 12px', borderRadius:20, border:`1px solid ${C.accent}33` }}>v{VERSION}</span>
-        </div>
-        <p style={{ color:C.muted, fontSize:13, lineHeight:1.7, marginBottom:12 }}>
-          Application de planification de repas hebdomadaire.
-        </p>
-        <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
-          <div style={{ fontSize:11, color:C.muted, fontWeight:600, marginBottom:6 }}>Historique</div>
-          <div style={{ fontSize:11, color:C.muted, lineHeight:1.9 }}>
+function SettingsAboutSection() {
+  return (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+        <span style={{ fontWeight:800, fontSize:17, color:C.text }}>🍽 Meal Plan</span>
+        <span style={{ background:C.accentBg, color:C.accent, fontSize:13, fontWeight:700, padding:'4px 12px', borderRadius:20, border:`1px solid ${C.accent}33` }}>v{VERSION}</span>
+      </div>
+      <p style={{ color:C.muted, fontSize:13, lineHeight:1.7, marginBottom:12 }}>
+        Application de planification de repas hebdomadaire.
+      </p>
+      <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
+        <div style={{ fontSize:11, color:C.muted, fontWeight:600, marginBottom:6 }}>Historique</div>
+        <div style={{ fontSize:11, color:C.muted, lineHeight:1.9 }}>
             <span style={{ color:C.accent }}>1.8.0</span> — Planning annuel · compacité · multi-ajout<br/>
             <span style={{ color:C.accent }}>1.9.0</span> — Import recettes depuis sites web<br/>
             <span style={{ color:C.accent }}>2.0.0</span> — IngredientParser · EmojiGuesser · Jow API<br/>
@@ -5847,31 +6006,8 @@ function SettingsTab() {
             <span style={{ color:C.accent }}>2.5.2</span> — Fix double ajout repas/ingrédients depuis fiche recette<br/>
             <span style={{ color:C.accent }}>2.5.1</span> — Import HTML brut (Overblog, Canalblog…) · Fix @type URL schema · Extraction JSON Claude robustifiée<br/>
             <span style={{ color:C.accent }}>2.5.0</span> — Ouvrir recette depuis planning · UX courses · Corrections
-          </div>
         </div>
       </div>
-
-      {/* ── Modaux ── */}
-      {editCat && (
-        <CategoryEditModal cat={editCat} onClose={() => setEditCat(null)} />
-      )}
-      {addOpen && (
-        <CategoryAddModal onClose={() => setAddOpen(false)} />
-      )}
-      {cantinePhotoOpen && (
-        <CantinePhotoImportModal
-          onClose={() => setCantinePhotoOpen(false)}
-          upsertCantineDays={upsertCantineDays}
-        />
-      )}
-      {cantineEditDate && (
-        <CantineDayEditModal
-          date={cantineEditDate}
-          existing={cantine.find(c => c.date === cantineEditDate)}
-          onClose={() => setCantineEditDate(null)}
-          upsertCantineDay={upsertCantineDay}
-        />
-      )}
     </div>
   );
 }
