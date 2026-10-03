@@ -41,10 +41,13 @@ import java.util.regex.Pattern;
  * source peut dégrader la qualité d'extraction sans faire planter le code —
  * dans le pire cas, un jour mal découpé, pas un crash.
  *
- * Limite connue : quand l'OCR perd carrément un chiffre (ex: "29" lu "2") ou
- * remplace un séparateur par une lettre (ex: "9/10" lu "VI10"), aucune
- * correction automatique ci-dessous ne peut le deviner de façon fiable — ces
- * cas restent à corriger à la main via la liste dans Options.
+ * Les 5 jours d'une semaine sont toujours 5 dates calendaires consécutives :
+ * reconstructRowDates() exploite cette contrainte pour corriger un chiffre de
+ * jour/mois aberrant, voire reconstituer un en-tête jamais reconnu comme tel
+ * par l'OCR (texte trop abîmé pour matcher ne serait-ce que le format JJ/MM),
+ * à partir d'un seul en-tête fiable de la même semaine. Limite restante : si
+ * une semaine entière n'a AUCUN en-tête lu correctement (aucune ancre fiable),
+ * rien n'est corrigé — reste alors à corriger à la main via la liste Options.
  */
 public class CantineMenuOcr {
 
@@ -127,11 +130,12 @@ public class CantineMenuOcr {
 
     private static class DayHeader {
         final String weekday;
-        final int day;
-        int month; // mutable : corrigé par continuité chronologique si incohérent
+        int day, month; // mutables : recalculés par reconstruction structurelle si incohérents
         final Rect rect;
-        DayHeader(String weekday, int day, int month, Rect rect) {
+        final boolean exactWeekdayMatch; // false si le nom du jour a été corrigé par similarité (ex: "MAROI"→"MARDI")
+        DayHeader(String weekday, int day, int month, Rect rect, boolean exactWeekdayMatch) {
             this.weekday = weekday; this.day = day; this.month = month; this.rect = rect;
+            this.exactWeekdayMatch = exactWeekdayMatch;
         }
     }
 
@@ -174,7 +178,8 @@ public class CantineMenuOcr {
                         int day   = Integer.parseInt(m.group(2));
                         int month = Integer.parseInt(m.group(3));
                         if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-                            headers.add(new DayHeader(weekday, day, month, l.rect));
+                            boolean exact = m.group(1).toUpperCase().equals(weekday);
+                            headers.add(new DayHeader(weekday, day, month, l.rect, exact));
                             matched = true;
                         }
                     } catch (NumberFormatException ignored) {}
@@ -226,6 +231,21 @@ public class CantineMenuOcr {
                 }
                 knownMonth = h.month;
             }
+        }
+
+        // 4ter. Reconstruction structurelle par semaine : les 5 jours d'une semaine sont
+        // TOUJOURS 5 dates calendaires consécutives, dans l'ordre fixe LUNDI→VENDREDI.
+        // Une fois qu'UN en-tête fiable de la semaine est identifié (ancre), tous les
+        // autres s'en déduisent par simple décalage de jours — ça corrige un jour dont
+        // le chiffre est aberrant (ex: "2" au lieu de "29") et ça permet de RECONSTITUER
+        // un en-tête totalement absent (ex: "VENDREDI VI10" jamais reconnu comme en-tête)
+        // en extrapolant sa position de colonne. L'ancre est choisie par cohérence
+        // mutuelle avec les autres en-têtes de la semaine (pas juste "le premier venu"),
+        // pour ne pas bâtir toute la reconstruction sur un en-tête qui serait lui-même
+        // mal lu.
+        for (List<DayHeader> row : weekRows) {
+            reconstructRowDates(row, year);
+            row.sort(Comparator.comparingInt(h -> h.rect.left)); // un en-tête synthétique a pu être ajouté en fin de liste
         }
 
         // 5. Pour chaque semaine : borne les colonnes (X, plafonnées — si un jour n'a pas
@@ -313,6 +333,93 @@ public class CantineMenuOcr {
             }
         }
         return dp[a.length()][b.length()];
+    }
+
+    private static int indexOfWeekday(String weekday) {
+        for (int i = 0; i < WEEKDAYS.length; i++) if (WEEKDAYS[i].equals(weekday)) return i;
+        return -1;
+    }
+
+    /**
+     * Recalcule les dates d'une semaine à partir d'un en-tête "ancre" choisi par
+     * cohérence mutuelle avec les autres en-têtes de la même semaine (pas juste le
+     * premier venu — un en-tête isolé peut lui-même être mal lu). Une fois l'ancre
+     * fixée, chaque jour de la semaine (présent ou absent) est positionné par simple
+     * décalage de jours calendaires — ça corrige un chiffre de jour aberrant et
+     * permet de SYNTHÉTISER un en-tête jamais reconnu comme tel par l'OCR.
+     */
+    private static void reconstructRowDates(List<DayHeader> row, int year) {
+        DayHeader[] bySlot = new DayHeader[5];
+        for (DayHeader h : row) {
+            int slot = indexOfWeekday(h.weekday);
+            if (slot >= 0 && bySlot[slot] == null) bySlot[slot] = h;
+        }
+
+        // Ancre : parmi les en-têtes dont le NOM du jour a été lu sans erreur (exclut
+        // "MAROI"→"MARDI" par exemple), celui dont la date implique le plus de
+        // cohérence avec les autres en-têtes présents de la semaine.
+        int anchorSlot = -1, bestScore = -1;
+        for (int i = 0; i < 5; i++) {
+            if (bySlot[i] == null || !bySlot[i].exactWeekdayMatch) continue;
+            Calendar cal = Calendar.getInstance();
+            cal.clear();
+            cal.set(year, bySlot[i].month - 1, bySlot[i].day);
+            int score = 0;
+            for (int j = 0; j < 5; j++) {
+                if (j == i || bySlot[j] == null) continue;
+                Calendar exp = (Calendar) cal.clone();
+                exp.add(Calendar.DAY_OF_MONTH, j - i);
+                if (exp.get(Calendar.DAY_OF_MONTH) == bySlot[j].day && (exp.get(Calendar.MONTH) + 1) == bySlot[j].month) {
+                    score++;
+                }
+            }
+            if (score > bestScore) { bestScore = score; anchorSlot = i; }
+        }
+        if (anchorSlot == -1) return; // aucun en-tête fiable dans cette semaine : rien à reconstruire
+
+        DayHeader anchor = bySlot[anchorSlot];
+        Calendar anchorCal = Calendar.getInstance();
+        anchorCal.clear();
+        anchorCal.set(year, anchor.month - 1, anchor.day);
+
+        // Largeur de colonne moyenne de la semaine (en-têtes présents uniquement),
+        // pour positionner un en-tête synthétique si un jour est totalement absent.
+        List<DayHeader> present = new ArrayList<>();
+        for (DayHeader h : bySlot) if (h != null) present.add(h);
+        present.sort(Comparator.comparingInt(h -> h.rect.left));
+        int avgColWidth = 0;
+        if (present.size() >= 2) {
+            avgColWidth = (present.get(present.size() - 1).rect.left - present.get(0).rect.left) / (present.size() - 1);
+        }
+
+        for (int i = 0; i < 5; i++) {
+            Calendar expCal = (Calendar) anchorCal.clone();
+            expCal.add(Calendar.DAY_OF_MONTH, i - anchorSlot);
+            int expDay = expCal.get(Calendar.DAY_OF_MONTH);
+            int expMonth = expCal.get(Calendar.MONTH) + 1;
+
+            if (bySlot[i] != null) {
+                // Recale sur la position structurelle attendue — plus fiable que les
+                // chiffres bruts de l'OCR une fois l'ancre validée par cohérence mutuelle.
+                bySlot[i].day = expDay;
+                bySlot[i].month = expMonth;
+            } else if (avgColWidth > 0) {
+                int nearestSlot = -1, nearestDist = Integer.MAX_VALUE;
+                for (int j = 0; j < 5; j++) {
+                    if (bySlot[j] == null) continue;
+                    int d = Math.abs(j - i);
+                    if (d < nearestDist) { nearestDist = d; nearestSlot = j; }
+                }
+                if (nearestSlot != -1) {
+                    Rect base = bySlot[nearestSlot].rect;
+                    int left = base.left + (i - nearestSlot) * avgColWidth;
+                    Rect synthetic = new Rect(left, base.top, left + base.width(), base.bottom);
+                    DayHeader h = new DayHeader(WEEKDAYS[i], expDay, expMonth, synthetic, true);
+                    row.add(h);
+                    bySlot[i] = h;
+                }
+            }
+        }
     }
 
     /**
