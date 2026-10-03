@@ -20,9 +20,10 @@ import org.json.JSONObject;
 import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,6 +40,11 @@ import java.util.regex.Pattern;
  * de largeur à peu près régulière). Un changement de mise en page du document
  * source peut dégrader la qualité d'extraction sans faire planter le code —
  * dans le pire cas, un jour mal découpé, pas un crash.
+ *
+ * Limite connue : quand l'OCR perd carrément un chiffre (ex: "29" lu "2") ou
+ * remplace un séparateur par une lettre (ex: "9/10" lu "VI10"), aucune
+ * correction automatique ci-dessous ne peut le deviner de façon fiable — ces
+ * cas restent à corriger à la main via la liste dans Options.
  */
 public class CantineMenuOcr {
 
@@ -46,9 +52,16 @@ public class CantineMenuOcr {
         void onResult(String resultJson); // {"days":[...]} ou {"error":"..."}
     }
 
+    private static final String[] WEEKDAYS = { "LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI" };
+
     private static final Pattern YEAR_PATTERN = Pattern.compile("\\b(20\\d{2})\\b");
-    private static final Pattern DAY_HEADER_PATTERN = Pattern.compile(
-        "(LUNDI|MARDI|MERCREDI|JEUDI|VENDREDI)\\D{0,3}(\\d{1,2})\\s*[/\\-]\\s*(\\d{1,2})",
+
+    // Capture un mot de 4 à 10 lettres (le jour, possiblement mal lu par l'OCR —
+    // ex: "MAROI" au lieu de "MARDI") suivi d'une date JJ/MM. La validation du jour
+    // de semaine se fait séparément via fuzzyWeekdayMatch (distance d'édition ≤ 1),
+    // pas dans le regex lui-même.
+    private static final Pattern DAY_HEADER_SCAN = Pattern.compile(
+        "([A-Z]{4,10})\\D{0,3}(\\d{1,2})\\s*[/\\-]\\s*(\\d{1,2})",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -114,7 +127,8 @@ public class CantineMenuOcr {
 
     private static class DayHeader {
         final String weekday;
-        final int day, month;
+        final int day;
+        int month; // mutable : corrigé par continuité chronologique si incohérent
         final Rect rect;
         DayHeader(String weekday, int day, int month, Rect rect) {
             this.weekday = weekday; this.day = day; this.month = month; this.rect = rect;
@@ -145,39 +159,35 @@ public class CantineMenuOcr {
             if (m.find()) { year = Integer.parseInt(m.group(1)); break; }
         }
 
-        // 3. Sépare les en-têtes de jour ("LUNDI 14/09") du reste du texte
+        // 3. Sépare les en-têtes de jour ("LUNDI 14/09") du reste du texte. Le jour de
+        // semaine est accepté par correspondance floue (distance d'édition ≤ 1) pour
+        // tolérer une lettre mal lue par l'OCR (ex: "MAROI" → "MARDI").
         List<DayHeader> headers = new ArrayList<>();
         List<OcrLine> contentLines = new ArrayList<>();
         for (OcrLine l : lines) {
-            Matcher m = DAY_HEADER_PATTERN.matcher(l.text);
+            Matcher m = DAY_HEADER_SCAN.matcher(l.text);
             boolean matched = false;
             if (m.find()) {
-                try {
-                    int day   = Integer.parseInt(m.group(2));
-                    int month = Integer.parseInt(m.group(3));
-                    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-                        headers.add(new DayHeader(m.group(1).toUpperCase(), day, month, l.rect));
-                        matched = true;
-                    }
-                } catch (NumberFormatException ignored) {}
+                String weekday = fuzzyWeekdayMatch(m.group(1));
+                if (weekday != null) {
+                    try {
+                        int day   = Integer.parseInt(m.group(2));
+                        int month = Integer.parseInt(m.group(3));
+                        if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+                            headers.add(new DayHeader(weekday, day, month, l.rect));
+                            matched = true;
+                        }
+                    } catch (NumberFormatException ignored) {}
+                }
             }
             if (!matched) contentLines.add(l);
         }
         if (headers.isEmpty()) {
             JSONObject err = new JSONObject();
             err.put("error", "Aucun jour détecté (en-têtes LUNDI/MARDI/… introuvables sur cette photo).");
-            err.put("raw", buildRawDump(lines, imageWidth));
+            err.put("raw", buildRawDump(lines));
             return err.toString();
         }
-
-        // 3bis. Hauteur de ligne "typique" (médiane) : sert à décider si deux lignes de
-        // contenu consécutives sont UN SEUL item coupé par un retour à la ligne visuel
-        // (ex: "Pâtes à" + "la bolognaise végétarienne" → un seul plat) ou DEUX catégories
-        // distinctes. ML Kit renvoie une Line par ligne VISUELLE, pas par item — sans ça,
-        // un plat qui prend 2 lignes dans la colonne étroite décale toutes les catégories
-        // suivantes de ce jour-là.
-        int typicalLineHeight = medianHeight(contentLines);
-        int paragraphGapThreshold = Math.max(4, (int) (typicalLineHeight * 0.6));
 
         // 4. Regroupe les en-têtes en lignes de semaine par proximité verticale
         headers.sort(Comparator.comparingInt(h -> h.rect.top));
@@ -199,14 +209,32 @@ public class CantineMenuOcr {
         }
         if (!current.isEmpty()) weekRows.add(current);
 
+        // 4bis. Trie chaque semaine par X (ordre chronologique Lundi→Vendredi) puis
+        // corrige les mois incohérents avec la progression dans le temps. L'erreur la
+        // plus fréquente observée : l'OCR lit "09" comme "01" (confusion du chiffre 9
+        // avec 1). Un mois qui n'est ni le mois courant ni le mois suivant est donc
+        // quasi certainement une erreur de lecture, pas un vrai changement de mois —
+        // on le remplace par le dernier mois valide rencontré en parcourant la photo
+        // du haut vers le bas.
+        int knownMonth = -1;
+        for (List<DayHeader> row : weekRows) {
+            row.sort(Comparator.comparingInt(h -> h.rect.left));
+            for (DayHeader h : row) {
+                if (knownMonth != -1) {
+                    boolean plausible = (h.month == knownMonth) || (h.month == (knownMonth % 12) + 1);
+                    if (!plausible) h.month = knownMonth;
+                }
+                knownMonth = h.month;
+            }
+        }
+
         // 5. Pour chaque semaine : borne les colonnes (X, plafonnées — si un jour n'a pas
         //    été détecté comme en-tête, son contenu ne doit pas se déverser sans limite
         //    dans la colonne voisine) et la bande verticale (Y), regroupe les lignes de
         //    contenu en paragraphes, puis assigne jusqu'à 4 par jour.
         JSONArray days = new JSONArray();
         for (int wi = 0; wi < weekRows.size(); wi++) {
-            List<DayHeader> row = weekRows.get(wi);
-            row.sort(Comparator.comparingInt(h -> h.rect.left));
+            List<DayHeader> row = weekRows.get(wi); // déjà trié par X à l'étape 4bis
 
             int rowBottom = (wi + 1 < weekRows.size()) ? minTop(weekRows.get(wi + 1)) : Integer.MAX_VALUE;
 
@@ -238,7 +266,7 @@ public class CantineMenuOcr {
                 }
                 cell.sort(Comparator.comparingInt(l -> l.rect.top));
 
-                List<String> paragraphs = mergeWrappedLines(cell, paragraphGapThreshold);
+                List<String> paragraphs = mergeWrappedLines(cell);
 
                 String entree  = paragraphs.size() > 0 ? paragraphs.get(0) : "";
                 String plat    = paragraphs.size() > 1 ? paragraphs.get(1) : "";
@@ -258,8 +286,33 @@ public class CantineMenuOcr {
 
         JSONObject out = new JSONObject();
         out.put("days", days);
-        out.put("raw", buildRawDump(lines, imageWidth)); // texte brut détecté, pour diagnostic
+        out.put("raw", buildRawDump(lines)); // texte brut détecté, pour diagnostic
         return out.toString();
+    }
+
+    /**
+     * Teste si `token` correspond à l'un des 5 jours de semaine, en acceptant une
+     * différence d'un caractère (distance de Levenshtein ≤ 1) pour tolérer une
+     * lettre mal lue par l'OCR (ex: "MAROI" → "MARDI", distance 1).
+     */
+    private static String fuzzyWeekdayMatch(String token) {
+        String upper = token.toUpperCase();
+        for (String w : WEEKDAYS) if (upper.equals(w)) return w;
+        for (String w : WEEKDAYS) if (levenshtein(upper, w) <= 1) return w;
+        return null;
+    }
+
+    private static int levenshtein(String a, String b) {
+        int[][] dp = new int[a.length() + 1][b.length() + 1];
+        for (int i = 0; i <= a.length(); i++) dp[i][0] = i;
+        for (int j = 0; j <= b.length(); j++) dp[0][j] = j;
+        for (int i = 1; i <= a.length(); i++) {
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                dp[i][j] = Math.min(Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
+            }
+        }
+        return dp[a.length()][b.length()];
     }
 
     /**
@@ -268,7 +321,7 @@ public class CantineMenuOcr {
      * indépendamment de l'heuristique de reconstruction de grille ci-dessus — utile
      * pour diagnostiquer un problème d'extraction sans deviner à l'aveugle.
      */
-    private static JSONArray buildRawDump(List<OcrLine> lines, int imageWidth) throws JSONException {
+    private static JSONArray buildRawDump(List<OcrLine> lines) throws JSONException {
         List<OcrLine> sorted = new ArrayList<>(lines);
         sorted.sort(Comparator.<OcrLine>comparingInt(l -> l.rect.top / 20).thenComparingInt(l -> l.rect.left));
         JSONArray raw = new JSONArray();
@@ -277,6 +330,7 @@ public class CantineMenuOcr {
             o.put("text", l.text);
             o.put("top", l.rect.top);
             o.put("left", l.rect.left);
+            o.put("bottom", l.rect.bottom);
             raw.put(o);
         }
         return raw;
@@ -289,33 +343,58 @@ public class CantineMenuOcr {
     }
 
     /**
-     * Fusionne les lignes OCR consécutives d'une cellule en paragraphes : un petit écart
-     * vertical entre deux lignes (≤ gapThreshold) = retour à la ligne du même item, un
-     * écart plus large = nouvelle catégorie (entrée/plat/fromage/dessert).
+     * Regroupe les lignes OCR d'une cellule en paragraphes (catégories). Un jour n'a
+     * pas toujours 4 catégories (ex: certains jours n'ont pas de fromage/laitage) —
+     * prendre systématiquement les 3 plus grands écarts comme coupures forçait donc
+     * parfois une coupure artificielle au milieu d'un plat sur plusieurs lignes.
+     *
+     * À la place : l'écart le plus PETIT entre deux lignes sert de référence pour ce
+     * qu'est un simple retour à la ligne dans un même item. Tout écart significativement
+     * plus grand (≥ 1,5× ce minimum) est traité comme une vraie coupure de catégorie —
+     * borné à 3 coupures max (jamais plus de 4 catégories par jour). Cette approche
+     * relative s'adapte à la résolution de chaque photo sans supposer de taille de
+     * police fixe, et ne force plus de coupure là où il n'y en a pas.
      */
-    private static List<String> mergeWrappedLines(List<OcrLine> cellLines, int gapThreshold) {
+    private static List<String> mergeWrappedLines(List<OcrLine> cellLines) {
+        int n = cellLines.size();
         List<String> paragraphs = new ArrayList<>();
-        StringBuilder current = null;
-        int prevBottom = Integer.MIN_VALUE;
-        for (OcrLine l : cellLines) {
-            if (current != null && (l.rect.top - prevBottom) <= gapThreshold) {
-                current.append(' ').append(l.text);
-            } else {
-                if (current != null) paragraphs.add(current.toString());
-                current = new StringBuilder(l.text);
-            }
-            prevBottom = l.rect.bottom;
-        }
-        if (current != null) paragraphs.add(current.toString());
-        return paragraphs;
-    }
+        if (n == 0) return paragraphs;
+        if (n == 1) { paragraphs.add(cellLines.get(0).text); return paragraphs; }
 
-    private static int medianHeight(List<OcrLine> lines) {
-        if (lines.isEmpty()) return 20; // repli raisonnable si aucune ligne de contenu
-        List<Integer> heights = new ArrayList<>();
-        for (OcrLine l : lines) heights.add(l.rect.height());
-        Collections.sort(heights);
-        return heights.get(heights.size() / 2);
+        int[] gaps = new int[n - 1];
+        for (int i = 0; i < n - 1; i++) {
+            gaps[i] = cellLines.get(i + 1).rect.top - cellLines.get(i).rect.bottom;
+        }
+
+        Set<Integer> breakPoints = new HashSet<>();
+        if (n == 2) {
+            // Seulement 2 lignes : pas assez de données pour distinguer "repli de ligne"
+            // d'une "vraie coupure" par comparaison relative — on suppose 2 items distincts.
+            breakPoints.add(0);
+        } else {
+            int minGap = Integer.MAX_VALUE;
+            for (int g : gaps) if (g > 0) minGap = Math.min(minGap, g);
+            if (minGap == Integer.MAX_VALUE) minGap = 1; // tous les écarts ≤ 0 (lignes superposées) : repli
+            int threshold = (int) (minGap * 1.5);
+
+            List<Integer> candidates = new ArrayList<>();
+            for (int i = 0; i < gaps.length; i++) if (gaps[i] >= threshold) candidates.add(i);
+            candidates.sort((a, b) -> gaps[b] - gaps[a]); // plus grand écart d'abord
+            int limit = Math.min(3, candidates.size()); // jamais plus de 4 catégories
+            for (int i = 0; i < limit; i++) breakPoints.add(candidates.get(i));
+        }
+
+        StringBuilder sb = new StringBuilder(cellLines.get(0).text);
+        for (int i = 0; i < n - 1; i++) {
+            if (breakPoints.contains(i)) {
+                paragraphs.add(sb.toString());
+                sb = new StringBuilder(cellLines.get(i + 1).text);
+            } else {
+                sb.append(' ').append(cellLines.get(i + 1).text);
+            }
+        }
+        paragraphs.add(sb.toString());
+        return paragraphs;
     }
 
     private static String safeMsg(Exception e) {
