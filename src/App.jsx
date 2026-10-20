@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.5.4"; // v72
+const VERSION = "3.6.0"; // v73
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -43,39 +43,106 @@ function useBackHandler(onClose, enabled = true) {
 // ══════════════════════════════════════════════════════
 //  PALETTE "ACIER NOCTURNE"
 // ══════════════════════════════════════════════════════
-const C = {
-  bg:       '#111419',
-  card:     '#181C24',
-  cardHov:  '#1E2432',
-  border:   '#2A3040',
-  accent:   '#7BA8E8',
-  accentDk: '#4878C8',
-  accentBg: 'rgba(123,168,232,0.11)',
-  green:    '#5CC4A0',
-  greenBg:  'rgba(92,196,160,0.12)',
-  text:     '#E8EAF2',
-  soft:     '#B0BDD8',
-  muted:    '#7888A8',
-  orange:   '#E8A87B',
-  orangeBg: 'rgba(232,168,123,0.12)',
-  red:      '#E87878',
-  redBg:    'rgba(232,120,120,0.10)',
-  sweet:    '#C87BD8',
-  sweetBg:  'rgba(200,123,216,0.10)',
-  planBg:   '#151B28',
-  planBdr:  '#243048',
-  cookedBg: 'rgba(92,196,160,0.14)',
-  yellow:   '#E8D878',
-  // En-tête / navigation / mode courses (bleu nuit)
-  sky:      C.sky,
-  skyCur:   C.skyCur,
-  navDk:    C.navDk,
-  navMid:   '#152E52',
-  navHdr:   '#1A3A6C',
-  navBdr:   '#1E4070',
-  navMuted: C.navMuted,
-  navDeep:  '#0D2040',
+// ══════════════════════════════════════════════════════
+//  THÈMES  —  « classique » = thème d'origine (inchangé) · « minuit » = nouveau thème
+//  C est un objet MUTABLE : applyTheme() recopie les valeurs du thème choisi dedans.
+//  Tous les composants lisent C.xxx au moment du rendu → changer de thème = re-rendre.
+// ══════════════════════════════════════════════════════
+const THEMES = {
+  classic: {
+    id:'classic', label:'Classique', modern:false,
+    bg:       '#111419',
+    card:     '#181C24',
+    cardHov:  '#1E2432',
+    border:   '#2A3040',
+    ring:     '#2A3040',
+    accent:   '#7BA8E8',
+    accentDk: '#4878C8',
+    accentBg: 'rgba(123,168,232,0.11)',
+    accentDkMid: 'rgba(72,120,200,0.4)',
+    green:    '#5CC4A0',
+    greenBg:  'rgba(92,196,160,0.12)',
+    text:     '#E8EAF2',
+    hi:       '#FFFFFF',
+    onAccent: '#FFFFFF',
+    soft:     '#B0BDD8',
+    muted:    '#7888A8',
+    orange:   '#E8A87B',
+    orangeBg: 'rgba(232,168,123,0.12)',
+    red:      '#E87878',
+    redBg:    'rgba(232,120,120,0.10)',
+    sweet:    '#C87BD8',
+    sweetBg:  'rgba(200,123,216,0.10)',
+    planBg:   '#151B28',
+    planBdr:  '#243048',
+    cookedBg: 'rgba(92,196,160,0.14)',
+    yellow:   '#E8D878',
+    snackBg:  '#253040',
+    catHdr:   '#1A2636',
+    curBg:     'rgba(100, 185, 255, 0.13)',
+    curBdr:    'rgba(100, 185, 255, 0.55)',
+    curTagBg:  'rgba(100,185,255,0.2)',
+    curTagBdr: 'rgba(100,185,255,0.4)',
+    sky:      '#7EC8FF',
+    skyCur:   '#64B9FF',
+    navDk:    '#0F2137',
+    navMid:   '#152E52',
+    navHdr:   '#1A3A6C',
+    navBdr:   '#1E4070',
+    navMuted: '#3A6080',
+    navDeep:  '#0D2040',
+    rBtn:9, rRow:9, rCard:12, rRecipe:11, rBig:14, rSheet:20,
+  },
+  minuit: {
+    id:'minuit', label:'Minuit', modern:true,
+    bg:       '#0D0E11',
+    card:     '#16181D',
+    cardHov:  '#1D2026',
+    border:   '#23262D',
+    ring:     '#3A3F4A',
+    accent:   '#5CC4A0',
+    accentDk: '#5CC4A0',
+    accentBg: 'rgba(92,196,160,0.12)',
+    accentDkMid: 'rgba(92,196,160,0.35)',
+    green:    '#5CC4A0',
+    greenBg:  'rgba(92,196,160,0.12)',
+    text:     '#ECEDF0',
+    hi:       '#ECEDF0',
+    onAccent: '#0D1F18',
+    soft:     '#B7BBC6',
+    muted:    '#8A8F9C',
+    orange:   '#E8A87B',
+    orangeBg: 'rgba(232,168,123,0.12)',
+    red:      '#E87878',
+    redBg:    'rgba(232,120,120,0.10)',
+    sweet:    '#C87BD8',
+    sweetBg:  'rgba(200,123,216,0.10)',
+    planBg:   '#1D2026',
+    planBdr:  '#23262D',
+    cookedBg: '#12251F',
+    yellow:   '#E8D878',
+    snackBg:  '#1D2026',
+    catHdr:   '#12251F',
+    curBg:     'rgba(92,196,160,0.08)',
+    curBdr:    'rgba(92,196,160,0.45)',
+    curTagBg:  'rgba(92,196,160,0.18)',
+    curTagBdr: 'rgba(92,196,160,0.4)',
+    sky:      '#5CC4A0',
+    skyCur:   '#5CC4A0',
+    navDk:    '#0D0E11',
+    navMid:   '#16181D',
+    navHdr:   '#16181D',
+    navBdr:   '#23262D',
+    navMuted: '#8A8F9C',
+    navDeep:  '#0D0E11',
+    rBtn:20, rRow:14, rCard:20, rRecipe:18, rBig:20, rSheet:28,
+  },
 };
+const THEME_IDS = ['classic', 'minuit'];
+
+const C = { ...THEMES.classic };
+function applyTheme(id) { Object.assign(C, THEMES[id] || THEMES.classic); }
+
 
 
 const UNITS = ['','g','kg','ml','cl','L','cs','cc','tasse','pincée','tranche','boîte','sachet','bouquet','gousse'];
@@ -368,6 +435,8 @@ function AppProvider({ children }) {
   const [cats,     setCats]     = useState(() => loadFromStorage('mp_cats',      DEFAULT_CATS));
   const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4, householdSize: 6 }));
   const [cantine,  setCantine]  = useState(() => loadFromStorage('mp_cantine',   []));
+  // Thème appliqué AVANT le rendu des enfants (C est lu pendant leur rendu)
+  applyTheme(settings.theme);
   const [planningTarget, setPlanningTarget] = useState(null); // weekKey cible pour navigation
 
   const [snack,    setSnack]    = useState(null);
@@ -734,13 +803,13 @@ function Btn({ onClick, children, variant='default', small, disabled, style }) {
   const base = {
     display:'inline-flex', alignItems:'center', gap:5,
     padding: small ? '7px 14px' : '9px 18px',
-    borderRadius:9, fontWeight:500, fontSize: small?13:15,
+    borderRadius:C.rBtn, fontWeight:500, fontSize: small?13:15,
     transition:'all 0.15s', cursor: disabled?'not-allowed':'pointer',
     opacity: disabled?0.5:1, border:'none', flexShrink:0,
   };
   const vs = {
     default: { background:C.border,   color:C.text },
-    primary: { background:C.accentDk, color:'#fff' },
+    primary: { background:C.accentDk, color:C.onAccent },
     green:   { background:C.greenBg,  color:C.green,  border:`1px solid ${C.green}44` },
     danger:  { background:C.redBg,    color:C.red,    border:`1px solid ${C.red}44` },
     ghost:   { background:'transparent', color:C.muted },
@@ -763,7 +832,7 @@ function BottomSheet({ title, onClose, children }) {
     }}>
       <div style={{
         width:'100%', maxWidth:480, margin:'0 auto',
-        background:C.card, borderRadius:'20px 20px 0 0',
+        background:C.card, borderRadius:`${C.rSheet}px ${C.rSheet}px 0 0`,
         maxHeight:'88vh', overflow:'hidden', display:'flex', flexDirection:'column',
         animation:'slideUp 0.22s ease',
       }}>
@@ -847,8 +916,46 @@ const TABS = [
   { id:'settings', icon:'⚙️', label:'Options' },
 ];
 
+/** Icônes en trait fin pour la barre du bas (thème moderne) — SVG intégré, aucun réseau */
+function TabIcon({ id, size=22 }) {
+  const paths = {
+    planning: <><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M8 3v4M16 3v4"/></>,
+    recipes:  <><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4z"/><path d="M5 17a3 3 0 0 1 3-3h10"/></>,
+    shopping: <><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/><path d="M3 4h2l2.2 10h10.3l1.8-7H6.2"/></>,
+    stats:    <path d="M5 20v-8M12 20V5M19 20v-6"/>,
+    settings: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink:0 }}>
+      {paths[id]}
+    </svg>
+  );
+}
+
 function AppHeader({ tab }) {
+  const { recipes, shopping } = useApp();
   const t = TABS.find(x => x.id===tab);
+
+  // Thème moderne : grand titre + petite ligne de contexte, pas de bandeau
+  if (C.modern) {
+    const wk = getISOWeekKey();
+    const nbArt = shopping.filter(x => !x.checked).length;
+    const ctx = {
+      planning: `SEMAINE ${wk.split('-W')[1]} · ${getWeekRange(wk).toUpperCase()}`,
+      recipes:  `${recipes.length} RECETTE${recipes.length > 1 ? 'S' : ''}`,
+      shopping: `${nbArt} ARTICLE${nbArt > 1 ? 'S' : ''} À ACHETER`,
+      stats:    'VOS HABITUDES',
+      settings: 'RÉGLAGES',
+    }[tab];
+    return (
+      <header style={{ padding:'22px 20px 10px', flexShrink:0, background:C.bg }}>
+        <div style={{ fontSize:12, color:C.muted, letterSpacing:'0.04em' }}>{ctx}</div>
+        <div style={{ fontSize:28, fontWeight:500, color:C.text, marginTop:2, lineHeight:1.15 }}>{t?.label}</div>
+      </header>
+    );
+  }
+
   return (
     <header style={{
       background: `linear-gradient(135deg, ${C.navDk} 0%, ${C.navHdr} 100%)`,
@@ -878,6 +985,44 @@ function AppHeader({ tab }) {
 function BottomNav({ tab, setTab }) {
   const { shopping } = useApp();
   const shopCount = shopping.filter(s => !s.checked).length;
+
+  // Thème moderne : barre flottante, onglet actif en pastille avec son libellé
+  if (C.modern) {
+    return (
+      <nav style={{
+        position:'fixed', bottom:14, left:'50%', transform:'translateX(-50%)',
+        width:'calc(100% - 28px)', maxWidth:452, height:58,
+        background:C.card, border:`1px solid ${C.border}`, borderRadius:26,
+        display:'flex', alignItems:'center', justifyContent:'space-around',
+        padding:'0 8px', zIndex:100,
+      }}>
+        {TABS.map(item => {
+          const active = tab === item.id;
+          return (
+            <button key={item.id} onClick={() => setTab(item.id)} aria-label={item.label} style={{
+              position:'relative', display:'flex', alignItems:'center', gap:6,
+              background: active ? C.accent : 'transparent',
+              color: active ? C.onAccent : C.muted,
+              border:'none', borderRadius:20, cursor:'pointer', fontFamily:'inherit',
+              padding: active ? '9px 14px' : '9px 12px', fontSize:13, fontWeight:500,
+              transition:'all 0.15s',
+            }}>
+              <TabIcon id={item.id} size={active ? 18 : 22} />
+              {active && <span>{item.label}</span>}
+              {item.id === 'shopping' && shopCount > 0 && !active && (
+                <span style={{
+                  position:'absolute', top:0, right:0, minWidth:16, height:16, padding:'0 4px',
+                  background:C.accent, color:C.onAccent, borderRadius:8,
+                  fontSize:10, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center',
+                }}>{shopCount > 99 ? '99' : shopCount}</span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    );
+  }
+
   return (
     <nav style={{
       position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)',
@@ -1023,7 +1168,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
           background:`linear-gradient(135deg,${C.navDk},${C.navHdr})`,
           borderRadius:'18px 18px 0 0', padding:'16px 18px', flexShrink:0,
         }}>
-          <div style={{ color:'#fff', fontWeight:700, fontSize:16, marginBottom:2 }}>
+          <div style={{ color:C.hi, fontWeight:700, fontSize:16, marginBottom:2 }}>
             🛒 Ingrédients à ajouter
           </div>
           <div style={{ color:C.sky, fontSize:12 }}>
@@ -1052,12 +1197,12 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
                   {/* Checkbox catégorie */}
                   <div style={{
                     width:18, height:18, borderRadius:4, flexShrink:0,
-                    background: allOn ? C.accentDk : someOn ? 'rgba(72,120,200,0.4)' : 'transparent',
+                    background: allOn ? C.accentDk : someOn ? C.accentDkMid : 'transparent',
                     border:`2px solid ${allOn||someOn ? C.accentDk : C.border}`,
                     display:'flex', alignItems:'center', justifyContent:'center',
                   }}>
-                    {allOn  && <span style={{color:'#fff',fontSize:10,fontWeight:700}}>✓</span>}
-                    {someOn && !allOn && <span style={{color:'#fff',fontSize:10}}>–</span>}
+                    {allOn  && <span style={{color:C.onAccent,fontSize:10,fontWeight:700}}>✓</span>}
+                    {someOn && !allOn && <span style={{color:C.onAccent,fontSize:10}}>–</span>}
                   </div>
                   <span style={{fontSize:16}}>{catEmoji}</span>
                   <span style={{fontSize:12, fontWeight:600, color:C.text, flex:1}}>{catName}</span>
@@ -1083,7 +1228,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
                         border:`2px solid ${on ? C.accentDk : C.border}`,
                         display:'flex', alignItems:'center', justifyContent:'center',
                       }}>
-                        {on && <span style={{color:'#fff',fontSize:9,fontWeight:700}}>✓</span>}
+                        {on && <span style={{color:C.onAccent,fontSize:9,fontWeight:700}}>✓</span>}
                       </div>
                       <span style={{flex:1, fontSize:13, color:C.text}}>{item.name}</span>
                       {multiRecipe && (
@@ -1124,7 +1269,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
             <button onClick={handleConfirm} disabled={checkedCount === 0} style={{
               flex:2, padding:'9px', borderRadius:10, border:'none',
               background: checkedCount > 0 ? C.accentDk : C.border,
-              color: checkedCount > 0 ? '#fff' : C.muted,
+              color: checkedCount > 0 ? C.onAccent : C.muted,
               fontSize:13, fontWeight:600,
               cursor: checkedCount > 0 ? 'pointer' : 'default',
               fontFamily:'inherit', transition:'all 0.15s',
@@ -1260,7 +1405,7 @@ function PlanningTab() {
             borderBottom:`1px solid ${C.border}`, padding:'9px 14px',
             display:'flex', alignItems:'center', justifyContent:'space-between',
           }}>
-            <span style={{ fontWeight:700, fontSize:14, color:C.text }}>📅 Planning</span>
+            {C.modern ? <span /> : <span style={{ fontWeight:700, fontSize:14, color:C.text }}>📅 Planning</span>}
             <span style={{ fontSize:12, color:C.muted }}>
               {weeksToShow} semaine{weeksToShow>1?'s':''} à venir
             </span>
@@ -1332,7 +1477,7 @@ function PlanningTab() {
                   padding:'3px 10px', borderRadius:20, flexShrink:0, cursor:'pointer',
                   fontSize:11, fontWeight: y === year ? 700 : 400,
                   background: y === year ? C.accentDk : 'transparent',
-                  color: y === year ? '#fff' : y === currentYear ? C.accent : C.muted,
+                  color: y === year ? C.onAccent : y === currentYear ? C.accent : C.muted,
                   border:`1px solid ${y === year ? C.accentDk : y === currentYear ? C.accent+'55' : C.border}`,
                 }}>{y}</button>
               ))}
@@ -1498,14 +1643,14 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
   };
 
   // Bleu ciel clair bien visible pour la semaine en cours
-  const curBg  = 'rgba(100, 185, 255, 0.13)';
-  const curBdr = 'rgba(100, 185, 255, 0.55)';
+  const curBg  = C.curBg;
+  const curBdr = C.curBdr;
 
   return (
     <div data-week={weekKey} style={{
       background: isCurrent ? curBg : C.card,
       border: `1px solid ${isCurrent ? curBdr : C.border}`,
-      borderRadius:12, marginBottom:6, overflow:'hidden',
+      borderRadius:C.rCard, marginBottom:6, overflow:'hidden',
     }}>
       <div onClick={() => setExpanded(e => !e)} style={{
         padding:'9px 13px', display:'flex', justifyContent:'space-between', alignItems:'center',
@@ -1515,9 +1660,9 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           {isCurrent && (
             <span style={{
-              fontSize:11, background:'rgba(100,185,255,0.2)', color:C.skyCur,
+              fontSize:11, background:C.curTagBg, color:C.skyCur,
               padding:'2px 8px', borderRadius:10, fontWeight:700, letterSpacing:'0.04em',
-              border:'1px solid rgba(100,185,255,0.4)',
+              border:`1px solid ${C.curTagBdr}`,
             }}>EN COURS</span>
           )}
           <span style={{ fontWeight:600, fontSize:15, color: isCurrent ? C.skyCur : C.text }}>
@@ -1620,14 +1765,14 @@ function MealItem({ meal, recipe, onViewRecipe }) {
       display:'flex', alignItems:'center', gap:6,
       background: meal.done ? C.cookedBg : C.planBg,
       border:`1px solid ${meal.done ? C.green+'33' : C.planBdr}`,
-      borderRadius:9, padding:'8px 10px', marginBottom:4, transition:'all 0.2s',
+      borderRadius:C.rRow, padding:'8px 10px', marginBottom:4, transition:'all 0.2s',
     }}>
       <button onClick={() => toggleMealDone(meal.id)} style={{
         width:24, height:24, borderRadius:'50%',
-        border:`2px solid ${meal.done ? C.green : C.border}`,
+        border:`2px solid ${meal.done ? C.green : C.ring}`,
         background: meal.done ? C.green : 'transparent',
         display:'flex', alignItems:'center', justifyContent:'center',
-        cursor:'pointer', color:'#fff', fontSize:12, flexShrink:0, transition:'all 0.2s',
+        cursor:'pointer', color:C.onAccent, fontSize:12, flexShrink:0, transition:'all 0.2s',
       }}>
         {meal.done ? '✓' : ''}
       </button>
@@ -1730,7 +1875,7 @@ function MealItem({ meal, recipe, onViewRecipe }) {
             )}
             <button onClick={saveNote} style={{
               flex:2, padding:'10px', background:C.accentDk,
-              border:'none', color:'#fff',
+              border:'none', color:C.onAccent,
               borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:700,
             }}>✓ Enregistrer</button>
           </div>
@@ -1841,7 +1986,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
             {[['browse','🗃 Toutes'],['suggest','💡 Suggestions']].map(([m, label]) => (
               <button key={m} onClick={() => setSuggestMode(m==='suggest')} style={{
                 background: (suggestMode ? 'suggest' : 'browse')===m ? C.accentDk : 'transparent',
-                color:      (suggestMode ? 'suggest' : 'browse')===m ? '#fff' : C.muted,
+                color:      (suggestMode ? 'suggest' : 'browse')===m ? C.onAccent : C.muted,
                 border:'none', borderRadius:7, padding:'5px 10px',
                 fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap',
               }}>{label}</button>
@@ -1907,7 +2052,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
                   border:`2px solid ${isSelected ? C.accentDk : C.border}`,
                   display:'flex', alignItems:'center', justifyContent:'center',
                 }}>
-                  {isSelected && <span style={{ color:'#fff', fontSize:10, fontWeight:700 }}>✓</span>}
+                  {isSelected && <span style={{ color:C.onAccent, fontSize:10, fontWeight:700 }}>✓</span>}
                 </div>
                 <span style={{ fontSize:22, flexShrink:0 }}>{r.emoji}</span>
                 <div style={{ flex:1, minWidth:0 }}>
@@ -1951,7 +2096,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
                 disabled={!freeText.trim()}
                 style={{
                   background: freeText.trim() ? C.accentDk : C.border, border:'none',
-                  color:'#fff', borderRadius:9, padding:'7px 13px',
+                  color: freeText.trim() ? C.onAccent : C.hi, borderRadius:9, padding:'7px 13px',
                   cursor: freeText.trim() ? 'pointer' : 'default', fontSize:13, fontWeight:700,
                 }}
               >+</button>
@@ -2033,7 +2178,7 @@ function ReportMealsModal({ weekKey, unfinishedMeals, recipes, onClose, onConfir
                 border:`2px solid ${on ? C.accentDk : C.border}`,
                 display:'flex', alignItems:'center', justifyContent:'center',
               }}>
-                {on && <span style={{ color:'#fff', fontSize:10, fontWeight:700 }}>✓</span>}
+                {on && <span style={{ color:C.onAccent, fontSize:10, fontWeight:700 }}>✓</span>}
               </div>
               <span style={{ fontSize:18, flexShrink:0 }}>{emoji}</span>
               <span style={{ flex:1, fontSize:14, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</span>
@@ -2375,7 +2520,7 @@ function RecipesTab() {
           {activeFilters > 0 && (
             <span style={{
               position:'absolute', top:-5, right:-5,
-              background:C.accent, color:'#fff', borderRadius:'50%',
+              background:C.accent, color:C.onAccent, borderRadius:'50%',
               width:16, height:16, fontSize:10, fontWeight:700,
               display:'flex', alignItems:'center', justifyContent:'center',
             }}>{activeFilters}</span>
@@ -2706,7 +2851,7 @@ function RecipeCard({ recipe, onClick, onDelete, onTypeChange, onSeasonsChange }
   return (
     <div onClick={onClick} style={{
       background:C.card, border:`1px solid ${C.border}`,
-      borderRadius:11, padding:'10px 9px 9px', cursor:'pointer', transition:'all 0.12s',
+      borderRadius:C.rRecipe, padding:'10px 9px 9px', cursor:'pointer', transition:'all 0.12s',
     }}>
       <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
         {/* Emoji */}
@@ -3016,7 +3161,7 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
               📋 Ajouter à la liste
               {missingIngredients.length > 0 && (
                 <span style={{
-                  background:C.accentDk, color:'#fff',
+                  background:C.accentDk, color:C.onAccent,
                   borderRadius:12, fontSize:10, fontWeight:800,
                   padding:'1px 6px', minWidth:18, textAlign:'center', flexShrink:0,
                 }}>{missingIngredients.length}</span>
@@ -3073,7 +3218,7 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
               {missingIngredients.length > 0 && (
                 <button onClick={handleAddMissing} style={{
                   flex:2, padding:'10px', background:C.accentDk, border:'none',
-                  color:'#fff', borderRadius:10, fontSize:12, fontWeight:700, cursor:'pointer',
+                  color:C.onAccent, borderRadius:10, fontSize:12, fontWeight:700, cursor:'pointer',
                 }}>Ajouter les {missingIngredients.length} manquants →</button>
               )}
               {presentIngredients.length > 0 && (
@@ -3156,7 +3301,7 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
             <div style={{
               width:22, height:22, borderRadius:'50%', flexShrink:0,
               background: checked.has(i) ? C.green : C.border,
-              color:'#fff', display:'flex', alignItems:'center', justifyContent:'center',
+              color: checked.has(i) ? C.onAccent : C.hi, display:'flex', alignItems:'center', justifyContent:'center',
               fontSize:11, fontWeight:700, transition:'all 0.2s',
             }}>
               {checked.has(i) ? '✓' : i+1}
@@ -3300,7 +3445,7 @@ function CookModeOverlay({ recipe, portions, onClose }) {
           <div style={{ fontSize:20, fontWeight:800, color:C.green, textAlign:'center' }}>Recette terminée !</div>
           <div style={{ fontSize:13, color:'rgba(92,196,160,0.6)' }}>Bon appétit 🍽</div>
           <button onClick={onClose} style={{
-            marginTop:12, background:C.green, border:'none', color:'#fff',
+            marginTop:12, background:C.green, border:'none', color:C.onAccent,
             borderRadius:13, padding:'12px 28px', fontSize:14, fontWeight:700, cursor:'pointer',
           }}>← Retour à la fiche</button>
         </div>
@@ -3360,7 +3505,7 @@ function CookModeOverlay({ recipe, portions, onClose }) {
                   {!timerDone && (
                     <button onClick={toggleTimer} style={{
                       background: timerSec === null ? timerColor : timerOn ? `${C.orange}33` : `${timerColor}33`,
-                      border:`1px solid ${timerColor}55`, color: timerSec === null ? '#fff' : timerColor,
+                      border:`1px solid ${timerColor}55`, color: timerSec === null ? C.onAccent : timerColor,
                       borderRadius:9, padding:'0 14px', height:36, cursor:'pointer', fontSize:12, fontWeight:700,
                     }}>
                       {timerSec === null ? '▶ Démarrer' : timerOn ? '⏸' : '▶'}
@@ -3384,7 +3529,7 @@ function CookModeOverlay({ recipe, portions, onClose }) {
               flex:3, padding:'13px', borderRadius:13,
               background: isDone ? 'rgba(92,196,160,0.12)' : C.green,
               border: isDone ? `1px solid ${C.green}44` : 'none',
-              color: isDone ? C.green : '#fff',
+              color: isDone ? C.green : C.onAccent,
               fontSize:14, fontWeight:800, cursor:'pointer', transition:'all 0.15s',
             }}>
               {isDone ? (stepIdx < total-1 ? '→ Suivante' : '✓ Terminer') : '✓ Fait'}
@@ -3498,7 +3643,7 @@ function WeeksBadge({ recipeId }) {
         📅 {shortLabel}
         {rest > 0 && (
           <span style={{
-            background:C.accent, color:'#fff',
+            background:C.accent, color:C.onAccent,
             borderRadius:10, fontSize:10, fontWeight:700,
             padding:'0 5px', lineHeight:'16px',
           }}>+{rest}</span>
@@ -3960,7 +4105,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
                 {[['url','🔗 URL'],['paste','📋 Texte']].map(([m, label]) => (
                   <button key={m} onClick={() => { setImportMode(m); setImportError(''); setImportDone(false); }} style={{
                     background: importMode===m ? C.accent : 'transparent',
-                    color: importMode===m ? '#fff' : C.muted,
+                    color: importMode===m ? C.onAccent : C.muted,
                     border:'none', borderRadius:6, padding:'4px 10px', fontSize:11, cursor:'pointer', fontWeight:600,
                   }}>{label}</button>
                 ))}
@@ -4284,7 +4429,7 @@ function MultiCategoryAssignModal({ uncatItems, onConfirm, onCancel }) {
           </select>
           <button onClick={applyBulk} disabled={!bulkCat} style={{
             padding:'7px 12px', borderRadius:8, border:'none', cursor: bulkCat?'pointer':'default',
-            background: bulkCat ? C.accentDk : C.border, color: bulkCat?'#fff':C.muted,
+            background: bulkCat ? C.accentDk : C.border, color: bulkCat?C.onAccent:C.muted,
             fontSize:12, fontWeight:600, fontFamily:'inherit', flexShrink:0,
           }}>Appliquer</button>
         </div>
@@ -4312,7 +4457,7 @@ function MultiCategoryAssignModal({ uncatItems, onConfirm, onCancel }) {
               <button onClick={handleCreateAndSelect} disabled={!newName.trim()} style={{
                 flex:2, padding:'7px', borderRadius:8, border:'none',
                 background: newName.trim() ? C.accentDk : C.border,
-                color: newName.trim() ? '#fff' : C.muted,
+                color: newName.trim() ? C.onAccent : C.muted,
                 fontSize:12, fontWeight:600, cursor: newName.trim()?'pointer':'default', fontFamily:'inherit',
               }}>Créer et assigner à tous</button>
             </div>
@@ -4430,7 +4575,7 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
               <button onClick={handleCreateAndAdd} disabled={!newName.trim()} style={{
                 flex:2, padding:'8px', borderRadius:9, border:'none',
                 background: newName.trim() ? C.accentDk : C.border,
-                color: newName.trim() ? '#fff' : C.muted,
+                color: newName.trim() ? C.onAccent : C.muted,
                 fontSize:12, fontWeight:600,
                 cursor: newName.trim() ? 'pointer' : 'default', fontFamily:'inherit',
               }}>Créer et ajouter</button>
@@ -4598,7 +4743,7 @@ function ShoppingTab() {
           {UNITS.map(u => <option key={u} value={u}>{u||'—'}</option>)}
         </select>
         <button onClick={handleAdd} style={{
-          background:C.accentDk, color:'#fff', border:'none', borderRadius:7,
+          background:C.accentDk, color:C.onAccent, border:'none', borderRadius:7,
           width:28, height:28, fontSize:18, cursor:'pointer', flexShrink:0,
           display:'flex', alignItems:'center', justifyContent:'center',
         }}>+</button>
@@ -4614,7 +4759,7 @@ function ShoppingTab() {
           {shopping.filter(s=>!s.checked).length > 0 && (
             <button onClick={() => setShopMode(true)} style={{
               background:`linear-gradient(135deg, ${C.accentDk}, ${C.accent})`,
-              border:'none', color:'#fff', borderRadius:9,
+              border:'none', color:C.onAccent, borderRadius:9,
               padding:'5px 11px', fontSize:12, fontWeight:700,
               cursor:'pointer', display:'flex', alignItems:'center', gap:4,
             }}>🛍 Faire les courses</button>
@@ -4695,7 +4840,7 @@ function ShoppingTab() {
             <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background:C.orangeBg }}>
               <span style={{ fontSize:15 }}>⚠️</span>
               <span style={{ fontWeight:600, fontSize:12, color:C.orange, flex:1 }}>Non catégorisé</span>
-              <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:C.orange, padding:'1px 7px', borderRadius:20 }}>{orphans.length}</span>
+              <span style={{ fontSize:10, fontWeight:700, color:C.onAccent, background:C.orange, padding:'1px 7px', borderRadius:20 }}>{orphans.length}</span>
             </div>
             <div style={{ background:C.bg }}>
               {orphans.map(item => (
@@ -4809,7 +4954,7 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
             <div style={{ fontSize:18, fontWeight:800, color:C.green, marginBottom:8 }}>Courses terminées !</div>
             <div style={{ fontSize:13, color:C.muted, marginBottom:24 }}>Tous les articles ont été récupérés.</div>
             <button onClick={handleExit} style={{
-              background:C.accentDk, border:'none', color:'#fff',
+              background:C.accentDk, border:'none', color:C.onAccent,
               borderRadius:12, padding:'12px 28px', fontSize:14, fontWeight:700, cursor:'pointer',
             }}>← Retour à la liste</button>
           </div>
@@ -4879,7 +5024,7 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
           <div style={{ display:'flex', gap:8 }}>
             <button onClick={() => { clearChecked(); onExit(); }} style={{
               flex:2, padding:'11px', background:C.green, border:'none',
-              color:'#fff', borderRadius:10, fontWeight:700, fontSize:13, cursor:'pointer',
+              color:C.onAccent, borderRadius:10, fontWeight:700, fontSize:13, cursor:'pointer',
             }}>🗑 Vider ({checkedCnt})</button>
             <button onClick={onExit} style={{
               flex:1, padding:'11px', background:C.border, border:'none',
@@ -4953,7 +5098,7 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
       style={{ marginBottom:7, borderRadius:10, overflow:'hidden', ...borderStyle, transition:'border 0.1s' }}
     >
       {/* En-tête */}
-      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 12px', background:'#1A2636', borderLeft:`3px solid ${C.accent}`, userSelect:'none' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 12px', background:C.catHdr, borderLeft:`3px solid ${C.accent}`, userSelect:'none' }}>
         <span style={{ color:C.muted, fontSize:14, cursor:'grab', paddingRight:2 }}>≡</span>
         {/* Tout supprimer la catégorie */}
         <button
@@ -4969,7 +5114,7 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
           <span style={{ fontSize:17 }}>{cat.emoji}</span>
           <span style={{ fontWeight:700, fontSize:14, color:C.accent }}>{cat.name}</span>
           <span style={{
-            fontSize:10, fontWeight:700, color:'#fff',
+            fontSize:10, fontWeight:700, color:C.onAccent,
             background:C.accent, padding:'1px 7px', borderRadius:20, marginLeft:'auto',
           }}>{items.length}</span>
           <span style={{ color:C.muted, fontSize:10 }}>{open?'▲':'▼'}</span>
@@ -5090,8 +5235,8 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
       <button onClick={() => deleteShoppingItem(item.id)} style={{
         width:20, height:20, borderRadius:'50%', flexShrink:0,
         background: item.checked ? C.green : 'transparent',
-        border:`2px solid ${item.checked ? C.green : C.border}`,
-        color:'#fff', cursor:'pointer', fontSize:10,
+        border:`2px solid ${item.checked ? C.green : C.ring}`,
+        color:C.onAccent, cursor:'pointer', fontSize:10,
         display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.2s',
       }}>
         {item.checked ? '✓' : ''}
@@ -5104,7 +5249,7 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
       {item.fromRecipeId && <span style={{ fontSize:10, color:C.accent, flexShrink:0 }}>📅</span>}
       {item.qty > 0 && (
         <span onClick={() => !item.checked && setEditing(true)} style={{
-          color:'#fff', fontSize:13, flexShrink:0, cursor: item.checked?'default':'pointer',
+          color:C.hi, fontSize:13, flexShrink:0, cursor: item.checked?'default':'pointer',
         }}>{item.qty}{item.unit?' '+item.unit:''}</span>
       )}
     </div>
@@ -5206,7 +5351,7 @@ function StatsTab() {
                     width: count > 0 ? `${(count / maxActivity) * 100}%` : '0%',
                     background: isCurrent
                       ? `linear-gradient(90deg, ${C.accentDk}, ${C.accent})`
-                      : `rgba(123,168,232,0.55)`,
+                      : `${C.accent}8C`,
                   }} />
                 </div>
                 <span style={{ fontSize:12, color: count>0 ? C.text : C.muted, width:16, textAlign:'right', flexShrink:0, fontWeight: count>0 ? 600 : 400 }}>
@@ -5388,6 +5533,7 @@ const SETTINGS_SECTION_TITLES = {
   foyer:      '👥 Taille du foyer',
   categories: '🛒 Catégories de courses',
   cantine:    '🏫 Menus cantine',
+  apparence:  '🎨 Apparence',
   sauvegarde: '💾 Sauvegarde & Restauration',
   apropos:    'ℹ️ À propos',
 };
@@ -5402,6 +5548,7 @@ function SettingsTab() {
     { id:'foyer',      emoji:'👥', title:'Taille du foyer',           desc:`${settings.householdSize || 6} personnes par défaut` },
     { id:'categories', emoji:'🛒', title:'Catégories de courses',    desc:`${cats.length} catégorie${cats.length!==1?'s':''} · ordre, mots-clés` },
     { id:'cantine',    emoji:'🏫', title:'Menus cantine',             desc: cantine.length ? `${cantine.length} jour${cantine.length!==1?'s':''} enregistré${cantine.length!==1?'s':''}` : 'Aucun menu enregistré' },
+    { id:'apparence',  emoji:'🎨', title:'Apparence',                 desc:`Thème : ${(THEMES[settings.theme] || THEMES.classic).label}` },
     { id:'sauvegarde', emoji:'💾', title:'Sauvegarde & Restauration', desc:'Export et import JSON complet' },
     { id:'apropos',    emoji:'ℹ️', title:'À propos',                  desc:`Version ${VERSION} · historique des changements` },
   ];
@@ -5413,6 +5560,7 @@ function SettingsTab() {
         {activeSection === 'foyer'      && <SettingsFoyerSection />}
         {activeSection === 'categories' && <SettingsCategoriesSection />}
         {activeSection === 'cantine'    && <SettingsCantineSection />}
+        {activeSection === 'apparence'  && <SettingsAppearanceSection />}
         {activeSection === 'sauvegarde' && <SettingsBackupSection />}
         {activeSection === 'apropos'    && <SettingsAboutSection />}
       </SettingsSectionShell>
@@ -5424,7 +5572,7 @@ function SettingsTab() {
       {rows.map(s => (
         <button key={s.id} onClick={() => setActiveSection(s.id)} style={{
           display:'flex', alignItems:'center', gap:12, width:'100%',
-          background:C.card, border:`1px solid ${C.border}`, borderRadius:14,
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:C.rBig,
           padding:'14px', marginBottom:10, cursor:'pointer', textAlign:'left', fontFamily:'inherit',
         }}>
           <span style={{ fontSize:24, flexShrink:0 }}>{s.emoji}</span>
@@ -5483,6 +5631,60 @@ function SettingsFoyerSection() {
           background:C.border, border:'none', color:C.text,
           width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
         }}>+</button>
+      </div>
+    </div>
+  );
+}
+
+const THEME_DESC = {
+  classic: 'Le thème d\'origine : bleu nuit, en-tête et barre du bas colorés.',
+  minuit:  'Gris neutre et vert menthe, grands titres, barre du bas flottante, coins plus arrondis.',
+};
+
+function SettingsAppearanceSection() {
+  const { settings, updSettings, showSnack } = useApp();
+  const current = THEMES[settings.theme] ? settings.theme : 'classic';
+  return (
+    <div>
+      {THEME_IDS.map(id => {
+        const T = THEMES[id];
+        const active = current === id;
+        return (
+          <button key={id} onClick={() => {
+            if (active) return;
+            updSettings({ theme: id });
+            showSnack(`🎨 Thème ${T.label} appliqué`);
+          }} style={{
+            display:'block', width:'100%', textAlign:'left', fontFamily:'inherit', cursor:'pointer',
+            background: active ? C.accentBg : C.card,
+            border: `1px solid ${active ? C.accent : C.border}`,
+            borderRadius:C.rBig, padding:14, marginBottom:10,
+          }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
+              <div style={{
+                width:22, height:22, borderRadius:'50%', flexShrink:0,
+                border:`2px solid ${active ? C.accent : C.ring}`,
+                background: active ? C.accent : 'transparent',
+                color:C.onAccent, fontSize:12, textAlign:'center', lineHeight:'18px',
+              }}>{active ? '✓' : ''}</div>
+              <span style={{ fontWeight:700, fontSize:15, color:C.text, flex:1 }}>{T.label}</span>
+              {active && <span style={{ fontSize:12, color:C.accent }}>Actif</span>}
+            </div>
+            {/* Aperçu : fond, carte, accent */}
+            <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, padding:10, marginBottom:10 }}>
+              <div style={{ fontSize:11, color:T.muted, marginBottom:6 }}>Aperçu</div>
+              <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:T.rRow, padding:'8px 10px', display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ width:16, height:16, borderRadius:'50%', background:T.green, flexShrink:0 }} />
+                <span style={{ flex:1, fontSize:12, color:T.text }}>Gratin de courgettes</span>
+                <span style={{ fontSize:11, color:T.onAccent, background:T.accentDk, borderRadius:T.rBtn, padding:'3px 10px' }}>Ajouter</span>
+              </div>
+            </div>
+            <div style={{ fontSize:12, color:C.muted, lineHeight:1.5 }}>{THEME_DESC[id]}</div>
+          </button>
+        );
+      })}
+      <div style={{ fontSize:12, color:C.muted, lineHeight:1.5 }}>
+        Le changement est immédiat et réversible. Tes données ne sont pas touchées.
       </div>
     </div>
   );
@@ -5707,6 +5909,7 @@ function SettingsBackupSection() {
 }
 
 const CHANGELOG = [
+  ['3.6.0', 'Thèmes : Classique (inchangé) et Minuit (nouveau) au choix dans Options > Apparence'],
   ['3.5.4', 'Fix plantage note sur repas libre · noms de repas sur 2 lignes · nettoyage code mort et couleurs · journal complété'],
   ['3.5.3', 'Import cantine : reconstruction des dates par la structure (5 jours consécutifs)'],
   ['3.5.2', 'Import cantine : corrections OCR (mois, jours déformés) et fusion de lignes recalibrée'],
@@ -5895,8 +6098,8 @@ function Snackbar() {
   if (!snack) return null;
   return (
     <div style={{
-      position:'fixed', bottom:84, left:'50%', transform:'translateX(-50%)',
-      background:'#253040', color:C.text, padding:'12px 16px',
+      position:'fixed', bottom: C.modern ? 90 : 84, left:'50%', transform:'translateX(-50%)',
+      background:C.snackBg, color:C.text, padding:'12px 16px',
       borderRadius:14, display:'flex', alignItems:'center', gap:12,
       boxShadow:'0 8px 28px rgba(0,0,0,0.5)', zIndex:600,
       animation:'slideUp 0.2s ease', maxWidth:360, width:'calc(100% - 32px)',
@@ -5905,7 +6108,7 @@ function Snackbar() {
       <span style={{ flex:1, fontSize:13 }}>{snack.msg}</span>
       {snack.undo && (
         <button onClick={() => { snack.undo(); setSnack(null); }} style={{
-          background:C.accent, color:'#fff', border:'none',
+          background:C.accent, color:C.onAccent, border:'none',
           padding:'5px 14px', borderRadius:8, cursor:'pointer', fontSize:13, fontWeight:700,
         }}>Annuler</button>
       )}
@@ -5950,7 +6153,7 @@ function AppShell() {
   return (
     <div style={{ height:'100vh', background:C.bg, display:'flex', flexDirection:'column', maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <AppHeader tab={tab} />
-      <main ref={mainRef} style={{ flex:1, overflowY:'auto', paddingBottom:70 }}>
+      <main ref={mainRef} style={{ flex:1, overflowY:'auto', paddingBottom: C.modern ? 92 : 70 }}>
         {tab === 'planning' && <PlanningTab />}
         {tab === 'recipes'  && <RecipesTab />}
         {tab === 'shopping' && <ShoppingTab />}
@@ -5966,21 +6169,28 @@ function AppShell() {
 // ══════════════════════════════════════════════════════
 //  EXPORT PRINCIPAL
 // ══════════════════════════════════════════════════════
-export default function MealPlanApp() {
+function GlobalStyle() {
+  useApp(); // se met à jour quand le thème change
   return (
-    <AppProvider>
-      <>
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
           *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-          html, body { background: #111419; font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif; }
+          html, body { background: ${C.bg}; font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif; }
           ::-webkit-scrollbar { width: 5px; height: 5px; }
           ::-webkit-scrollbar-track { background: transparent; }
-          ::-webkit-scrollbar-thumb { background: #2A3040; border-radius: 4px; }
+          ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 4px; }
           @keyframes fadeIn  { from { opacity: 0; }              to { opacity: 1; } }
           @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
           @keyframes spin    { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         `}</style>
+  );
+}
+
+export default function MealPlanApp() {
+  return (
+    <AppProvider>
+      <>
+        <GlobalStyle />
         <AppShell />
       </>
     </AppProvider>
