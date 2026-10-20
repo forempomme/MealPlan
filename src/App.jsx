@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.5.3"; // v71
+const VERSION = "3.5.4"; // v72
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -66,6 +66,15 @@ const C = {
   planBdr:  '#243048',
   cookedBg: 'rgba(92,196,160,0.14)',
   yellow:   '#E8D878',
+  // En-tête / navigation / mode courses (bleu nuit)
+  sky:      C.sky,
+  skyCur:   C.skyCur,
+  navDk:    C.navDk,
+  navMid:   '#152E52',
+  navHdr:   '#1A3A6C',
+  navBdr:   '#1E4070',
+  navMuted: C.navMuted,
+  navDeep:  '#0D2040',
 };
 
 
@@ -344,11 +353,6 @@ function loadFromStorage(key, defaultValue) {
     } catch {}
   }
   return _mem[key] !== undefined ? _mem[key] : defaultValue;
-}
-
-function saveToStorage(key, value) {
-  _mem[key] = value;
-  if (_ls) { try { _ls.setItem(key, JSON.stringify(value)); } catch {} }
 }
 
 // ══════════════════════════════════════════════════════
@@ -847,8 +851,8 @@ function AppHeader({ tab }) {
   const t = TABS.find(x => x.id===tab);
   return (
     <header style={{
-      background: 'linear-gradient(135deg, #0F2137 0%, #1A3A6C 100%)',
-      borderBottom: '1px solid #1E4070',
+      background: `linear-gradient(135deg, ${C.navDk} 0%, ${C.navHdr} 100%)`,
+      borderBottom: `1px solid ${C.navBdr}`,
       padding: '16px 18px',
       display:'flex', justifyContent:'space-between', alignItems:'center',
       position:'sticky', top:0, zIndex:100, flexShrink:0,
@@ -857,13 +861,13 @@ function AppHeader({ tab }) {
         <div style={{ fontWeight:800, fontSize:22, color:'#FFFFFF', letterSpacing:'-0.02em', lineHeight:1.1 }}>
           🍽 Meal Plan
         </div>
-        <div style={{ fontSize:15, color:'#7EC8FF', marginTop:3, fontWeight:500 }}>
+        <div style={{ fontSize:15, color:C.sky, marginTop:3, fontWeight:500 }}>
           {t?.icon} {t?.label}
         </div>
       </div>
       <div style={{
         background: 'rgba(126,200,255,0.15)',
-        color: '#7EC8FF',
+        color: C.sky,
         fontSize:13, fontWeight:700, padding:'5px 13px', borderRadius:20,
         border:'1px solid rgba(126,200,255,0.4)', letterSpacing:'0.02em',
       }}>v{VERSION}</div>
@@ -878,8 +882,8 @@ function BottomNav({ tab, setTab }) {
     <nav style={{
       position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)',
       width:'100%', maxWidth:480,
-      background: 'linear-gradient(180deg, #152E52 0%, #0F2137 100%)',
-      borderTop: '1px solid #1E4070',
+      background: `linear-gradient(180deg, ${C.navMid} 0%, ${C.navDk} 100%)`,
+      borderTop: `1px solid ${C.navBdr}`,
       display:'flex', zIndex:100, height:70,
     }}>
       {TABS.map(item => {
@@ -895,7 +899,7 @@ function BottomNav({ tab, setTab }) {
             {active && (
               <div style={{
                 position:'absolute', top:0, left:'22%', right:'22%',
-                height:2, background:'#7EC8FF',
+                height:2, background:C.sky,
                 borderRadius:'0 0 3px 3px',
               }} />
             )}
@@ -905,7 +909,7 @@ function BottomNav({ tab, setTab }) {
               {item.id === 'shopping' && shopCount > 0 && (
                 <span style={{
                   position:'absolute', top:-4, right:-7,
-                  background:'#7EC8FF', color:'#0F2137',
+                  background:C.sky, color:C.navDk,
                   borderRadius:'50%', width:16, height:16,
                   fontSize:9, fontWeight:800,
                   display:'flex', alignItems:'center', justifyContent:'center',
@@ -914,7 +918,7 @@ function BottomNav({ tab, setTab }) {
             </div>
             <span style={{
               fontSize:13, fontWeight: active ? 700 : 400,
-              color: active ? '#7EC8FF' : '#3A6080',
+              color: active ? C.sky : C.navMuted,
               letterSpacing:'0.04em',
             }}>
               {item.label.toUpperCase()}
@@ -1016,13 +1020,13 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
       }}>
         {/* Header */}
         <div style={{
-          background:'linear-gradient(135deg,#0F2137,#1A3A6C)',
+          background:`linear-gradient(135deg,${C.navDk},${C.navHdr})`,
           borderRadius:'18px 18px 0 0', padding:'16px 18px', flexShrink:0,
         }}>
           <div style={{ color:'#fff', fontWeight:700, fontSize:16, marginBottom:2 }}>
             🛒 Ingrédients à ajouter
           </div>
-          <div style={{ color:'#7EC8FF', fontSize:12 }}>
+          <div style={{ color:C.sky, fontSize:12 }}>
             {multiRecipe
               ? `${selections.length} recettes · décochez ce que vous avez déjà`
               : `${selections[0].recipe.emoji} ${selections[0].recipe.name} · décochez ce que vous avez déjà`}
@@ -1511,12 +1515,12 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           {isCurrent && (
             <span style={{
-              fontSize:11, background:'rgba(100,185,255,0.2)', color:'#64B9FF',
+              fontSize:11, background:'rgba(100,185,255,0.2)', color:C.skyCur,
               padding:'2px 8px', borderRadius:10, fontWeight:700, letterSpacing:'0.04em',
               border:'1px solid rgba(100,185,255,0.4)',
             }}>EN COURS</span>
           )}
-          <span style={{ fontWeight:600, fontSize:15, color: isCurrent ? '#64B9FF' : C.text }}>
+          <span style={{ fontWeight:600, fontSize:15, color: isCurrent ? C.skyCur : C.text }}>
             S{wn}
           </span>
           <span style={{ fontSize:13, color:C.muted }}>{getWeekRange(weekKey)}</span>
@@ -1634,7 +1638,8 @@ function MealItem({ meal, recipe, onViewRecipe }) {
         <div style={{
           fontWeight:500, fontSize:15, color: meal.done ? C.muted : C.text,
           textDecoration: meal.done ? 'line-through' : 'none',
-          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+          overflow:'hidden', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical',
+          lineHeight:1.3, wordBreak:'break-word',
         }}>{mealName}</div>
         {(wasLastWeek || meal.note) && (
           <div style={{ display:'flex', gap:6, marginTop:2, alignItems:'center' }}>
@@ -1698,7 +1703,7 @@ function MealItem({ meal, recipe, onViewRecipe }) {
         }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
             <span style={{ fontWeight:700, color:C.text, fontSize:14 }}>
-              📝 Note — {recipe.name}
+              📝 Note — {mealName}
             </span>
             <button onClick={() => setNoteOpen(false)} style={{ background:'transparent', border:'none', color:C.muted, cursor:'pointer', fontSize:18, lineHeight:1 }}>✕</button>
           </div>
@@ -1709,7 +1714,7 @@ function MealItem({ meal, recipe, onViewRecipe }) {
             autoFocus
             rows={3}
             style={{
-              width:'100%', background:'#111419', border:`1px solid ${C.border}`,
+              width:'100%', background:C.bg, border:`1px solid ${C.border}`,
               borderRadius:10, padding:'10px 12px', color:C.text, fontSize:13,
               outline:'none', resize:'none', fontFamily:'inherit',
               lineHeight:1.5, boxSizing:'border-box',
@@ -2477,7 +2482,7 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
     ? allTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase()))
     : allTags;
 
-  const inp = { padding:'8px 11px', background:'#111419', border:`1px solid #2A3040`, borderRadius:9, color:'#E8EAF2', fontSize:13, outline:'none', width:'100%' };
+  const inp = { padding:'8px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none', width:'100%' };
 
   const SORT_OPTIONS = [
     { v:'newest',    label:'📅 Plus récente' },
@@ -3271,11 +3276,6 @@ function CookModeOverlay({ recipe, portions, onClose }) {
       background:'linear-gradient(180deg, #0C1A14 0%, #0D1A1F 100%)',
       display:'flex', flexDirection:'column', animation:'fadeIn 0.18s',
     }}>
-      {/* Status bar */}
-      <div style={{ background:'transparent', padding:'8px 18px 6px', display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(92,196,160,0.5)', flexShrink:0 }}>
-        <span>9:41</span><span>●●●</span>
-      </div>
-
       {/* Header */}
       <div style={{ padding:'8px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
         <button onClick={onClose} style={{ background:'transparent', border:'none', color:'rgba(92,196,160,0.7)', fontSize:12, cursor:'pointer', fontWeight:600 }}>✕ Quitter</button>
@@ -3661,209 +3661,6 @@ function parseTextRecipe(text) {
   return { name, servings: 4, cookTimeMinutes: 0, tags: [], ingredients, steps, note: '' };
 }
 
-// ══════════════════════════════════════════════════════
-//  HTML PARSERS  (JSON-LD → __NEXT_DATA__ → Microdata)
-// ══════════════════════════════════════════════════════
-
-/** Durée ISO 8601 → minutes  (PT1H30M → 90) */
-function parseDuration(iso) {
-  if (!iso) return 0;
-  const m = String(iso).match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
-  return m ? (parseInt(m[1]||0) * 60) + parseInt(m[2]||0) : 0;
-}
-
-/** Extrait le nombre de portions depuis une valeur brute */
-function parseServings(raw) {
-  if (!raw) return 4;
-  if (typeof raw === 'number') return raw;
-  const m = String(raw).match(/\d+/);
-  return m ? parseInt(m[0]) : 4;
-}
-
-/** Aplatis les instructions Schema.org (HowToStep, HowToSection, string…) */
-function parseInstructions(raw) {
-  if (!raw) return [];
-  if (typeof raw === 'string') return raw.split(/\n+/).map(s=>s.trim()).filter(Boolean);
-  if (Array.isArray(raw)) {
-    return raw.flatMap(item => {
-      if (!item) return [];
-      if (typeof item === 'string') return [item.trim()];
-      if (item['@type'] === 'HowToSection') return parseInstructions(item.itemListElement);
-      return [(item.text || item.name || item.description || '').trim()];
-    }).filter(Boolean);
-  }
-  return [];
-}
-
-/** Normalise un objet Schema.org Recipe → format interne */
-function normalizeSchemaRecipe(s) {
-  const rawIng = s.recipeIngredient || s.ingredients || [];
-  const ingredients = (Array.isArray(rawIng) ? rawIng : [rawIng])
-    .map(i => typeof i === 'string' ? i : i.name || '')
-    .filter(Boolean);
-
-  const steps = parseInstructions(s.recipeInstructions || s.instructions || s.steps);
-
-  const tags = [];
-  const cat = s.recipeCategory || s.category;
-  if (cat) (Array.isArray(cat) ? cat : [cat]).forEach(c => typeof c==='string' && tags.push(c));
-
-  return {
-    name:            (typeof s.name === 'string' ? s.name : '').trim(),
-    cookTimeMinutes: parseDuration(s.totalTime || s.cookTime),
-    servings:        parseServings(s.recipeYield),
-    ingredients,
-    steps,
-    tags,
-    note:            s.description ? '' : '',
-  };
-}
-
-/**
- * Cherche récursivement un objet { "@type": "Recipe" } dans n'importe quelle
- * structure JSON jusqu'à `depth` niveaux (gère @graph, tableaux, objets imbriqués).
- */
-function findRecipeInObj(obj, depth = 10) {
-  if (!obj || typeof obj !== 'object' || depth === 0) return null;
-  const t = obj['@type'];
-  const isRecipe =
-    t === 'Recipe' ||
-    (typeof t === 'string' && (t.endsWith('/Recipe') || t.toLowerCase().includes('schema.org/recipe'))) ||
-    (Array.isArray(t) && t.some(v => typeof v === 'string' && (v === 'Recipe' || v.endsWith('/Recipe'))));
-  if (isRecipe) return obj;
-  if (Array.isArray(obj)) {
-    for (const item of obj) { const r = findRecipeInObj(item, depth-1); if (r) return r; }
-    return null;
-  }
-  for (const val of Object.values(obj)) {
-    if (val && typeof val === 'object') { const r = findRecipeInObj(val, depth-1); if (r) return r; }
-  }
-  return null;
-}
-
-/**
- * Heuristique pour __NEXT_DATA__ : trouve un objet avec name + recipeIngredient/ingredients
- * sans forcément avoir @type = Recipe.
- */
-function findRecipeHeuristic(obj, depth = 12) {
-  if (!obj || typeof obj !== 'object' || depth === 0) return null;
-  if (!Array.isArray(obj)) {
-    if (obj.name && typeof obj.name === 'string' &&
-        (obj.recipeIngredient || obj.ingredients) &&
-        (obj.recipeInstructions || obj.instructions || obj.steps)) {
-      return obj;
-    }
-  }
-  const items = Array.isArray(obj) ? obj : Object.values(obj);
-  for (const val of items) {
-    if (val && typeof val === 'object') {
-      const r = findRecipeHeuristic(val, depth-1);
-      if (r) return r;
-    }
-  }
-  return null;
-}
-
-/** Étape 2 — JSON-LD : <script type="application/ld+json"> */
-function parseJsonLd(doc) {
-  const scripts = doc.querySelectorAll('script[type="application/ld+json"]');
-  for (const script of scripts) {
-    try {
-      const json = JSON.parse(script.textContent);
-      const recipe = findRecipeInObj(json);
-      if (recipe) return normalizeSchemaRecipe(recipe);
-    } catch (_) {}
-  }
-  return null;
-}
-
-/** Étape 3 — __NEXT_DATA__ : <script id="__NEXT_DATA__"> (sites Next.js) */
-function parseNextData(doc) {
-  const script = doc.getElementById('__NEXT_DATA__');
-  if (!script) return null;
-  try {
-    const json = JSON.parse(script.textContent);
-    const byType = findRecipeInObj(json, 12);
-    if (byType) return normalizeSchemaRecipe(byType);
-    const byHeuristic = findRecipeHeuristic(json, 12);
-    if (byHeuristic) return normalizeSchemaRecipe(byHeuristic);
-  } catch (_) {}
-  return null;
-}
-
-/** Étape 4 — Microdata : [itemtype*="schema.org/Recipe"] */
-function parseMicrodata(doc) {
-  const root = doc.querySelector('[itemtype*="schema.org/Recipe"],[itemtype*="Recipe"]');
-  if (!root) return null;
-  const get    = prop => root.querySelector(`[itemprop="${prop}"]`);
-  const getVal = prop => { const el=get(prop); return el ? (el.getAttribute('content')||el.textContent.trim()) : null; };
-  const getAll = prop => Array.from(root.querySelectorAll(`[itemprop="${prop}"]`))
-                              .map(el => el.getAttribute('content')||el.textContent.trim())
-                              .filter(Boolean);
-  const name = getVal('name');
-  if (!name) return null;
-  return {
-    name,
-    cookTimeMinutes: parseDuration(getVal('totalTime') || getVal('cookTime')),
-    servings:        parseServings(getVal('recipeYield')),
-    ingredients:     getAll('recipeIngredient'),
-    steps:           getAll('recipeInstructions'),
-    tags:            getAll('recipeCategory'),
-    note:            '',
-  };
-}
-
-/**
- * Étape 5 — HTML brut : extrait ingrédients et étapes depuis les sections
- * "Ingrédients" / "Préparation" pour les blogs sans markup structuré (Overblog, Canalblog…).
- */
-function parseHtmlContent(doc) {
-  const normFr = s => s.toLowerCase()
-    .replace(/[éèêë]/g, 'e').replace(/[àâä]/g, 'a')
-    .replace(/[ùûü]/g, 'u').replace(/[ôö]/g, 'o').replace(/[îï]/g, 'i');
-
-  // Titre
-  let name = '';
-  const h1 = doc.querySelector('h1');
-  if (h1) name = h1.textContent.trim();
-  if (!name) {
-    const t = doc.querySelector('title');
-    if (t) name = t.textContent.replace(/\s*[-|–—].*$/, '').trim();
-  }
-
-  // Conteneur principal
-  const content = doc.querySelector(
-    'article, .entry-content, .post-content, .article-content, ' +
-    '.ob-post-content, .ob-section-text, .post-body, [itemprop="articleBody"], main'
-  ) || doc.body;
-
-  const ingredients = [], steps = [];
-  let section = null;
-
-  for (const el of content.querySelectorAll('h1,h2,h3,h4,h5,p,li,b,strong')) {
-    const tag   = el.tagName.toLowerCase();
-    const text  = el.textContent.trim();
-    if (!text) continue;
-    const lower = normFr(text);
-    const isHeader = /^h[1-5]$/.test(tag) || ((tag === 'b' || tag === 'strong') && text.length < 60);
-
-    if (isHeader || (lower.endsWith(':') && text.length < 60)) {
-      if (/ingr.?dient/.test(lower))                              { section = 'ing';  continue; }
-      if (/(pr.?paration|.?tape|instruction|r.?alisation)/.test(lower)) { section = 'step'; continue; }
-      if (/^h[1-3]$/.test(tag)) section = null;
-    }
-
-    if (tag === 'li' || tag === 'p') {
-      const clean = text.replace(/^\s*[-–•*·]\s*/, '').replace(/^\d+[.)]\s*/, '').trim();
-      if (section === 'ing'  && clean && clean.length < 200)  ingredients.push(clean);
-      if (section === 'step' && clean && clean.length > 15)   steps.push(clean);
-    }
-  }
-
-  if (!ingredients.length && !steps.length) return null;
-  return { name, cookTimeMinutes: 0, servings: 4, ingredients, steps, tags: [], note: '' };
-}
-
 function RecipeEditor({ recipe, onClose, onSave }) {
   useBackHandler(tryClose);
   const { recipes } = useApp();
@@ -3982,38 +3779,6 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     window.Android.importRecipe(url, cbId);
   });
 
-  // ── Fallback : Claude API (web_search) ────────────────────
-  const fetchViaClaude = async (url) => {
-    setImportStep('🤖 Analyse via Claude AI (fallback)…');
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 3000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: `Tu es un parseur de recettes de cuisine. Accède à l'URL fournie et extrais la recette.
-Stratégie : JSON-LD (@type:Recipe) → __NEXT_DATA__ → Microdata → texte brut.
-Réponds UNIQUEMENT avec un objet JSON valide, sans markdown.
-Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredients":["200 g de farine"],"steps":["Étape 1"],"note":""}
-- ingredients : chaînes BRUTES telles qu'elles apparaissent sur le site
-- servings : nombre ORIGINAL du site`,
-        messages: [{ role: 'user', content: `Extrais la recette de : ${url}` }],
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message || 'Erreur API Claude');
-    const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-    // Cherche le bloc JSON dans la réponse (même si Claude ajoute du texte autour)
-    const jsonMatch = texts.replace(/^```(?:json)?\s*/im, '').replace(/\s*```\s*$/im, '').match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new SyntaxError('Aucun objet JSON trouvé dans la réponse Claude');
-    const rec = JSON.parse(jsonMatch[0]);
-    rec.ingredients = (rec.ingredients || []).map(i =>
-      typeof i === 'string' ? i : [i.qty||'', i.unit||'', i.name||''].filter(Boolean).join(' ')
-    );
-    return rec;
-  };
-
   // ── Mise à l'échelle → 6 personnes + IngredientParser ──
   const applyScale = (raw) => {
     const src   = raw.servings || raw.portions || 4;
@@ -4089,13 +3854,10 @@ Format : {"name":"...","servings":4,"cookTimeMinutes":30,"tags":["tag"],"ingredi
     }
   };
 
-  // Essaie le pont Android, puis Claude en fallback
+  // Import via le pont Android ; en cas d'échec, on affiche la vraie cause + une piste de secours
   const tryHtmlPipeline = async (url) => {
     try   { return await fetchViaAndroid(url); }
-    catch (e) {
-      setImportStep(`↩ ${e.message} — bascule sur Claude AI…`);
-      return await fetchViaClaude(url);
-    }
+    catch (e) { throw new Error(`${e.message}. Essaie le mode "Coller le texte".`); }
   };
 
   // ── Base de référence pour le recalcul des portions ──
@@ -4484,7 +4246,7 @@ function MultiCategoryAssignModal({ uncatItems, onConfirm, onCancel }) {
   }, [cats]);
 
   const allAssigned = uncatItems.every(i => assignments[i.id]);
-  const inp = { padding:'7px 10px', background:'#111419', border:`1px solid #2A3040`, borderRadius:8, color:'#E8EAF2', fontSize:12, outline:'none' };
+  const inp = { padding:'7px 10px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:12, outline:'none' };
 
   const applyBulk = () => {
     if (!bulkCat) return;
@@ -4592,7 +4354,7 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
   const [newName,   setNewName]   = useState('');
   const [newEmoji,  setNewEmoji]  = useState('📦');
 
-  const inp = { padding:'8px 11px', background:'#111419', border:`1px solid #2A3040`, borderRadius:9, color:'#E8EAF2', fontSize:13, outline:'none' };
+  const inp = { padding:'8px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none' };
 
   const handleCreateAndAdd = () => {
     if (!newName.trim()) return;
@@ -5008,21 +4770,21 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
     }}>
       {/* ── Header ── */}
       <div style={{
-        background: 'linear-gradient(135deg, #0D2040, #152E52)',
+        background: `linear-gradient(135deg, ${C.navDeep}, ${C.navMid})`,
         padding:'12px 16px 10px', flexShrink:0,
-        borderBottom:'1px solid #1E4070',
+        borderBottom:`1px solid ${C.navBdr}`,
         position:'sticky', top:0, zIndex:10,
       }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
           <div>
-            <div style={{ fontSize:15, fontWeight:800, color:'#7EC8FF' }}>🛍 Mode courses</div>
-            <div style={{ fontSize:12, color:'#3A6080', marginTop:1 }}>
+            <div style={{ fontSize:15, fontWeight:800, color:C.sky }}>🛍 Mode courses</div>
+            <div style={{ fontSize:12, color:C.navMuted, marginTop:1 }}>
               {allGone ? 'Tout est dans le chariot !' : `${unchecked.length} article${unchecked.length>1?'s':''} restant${unchecked.length>1?'s':''}`}
             </div>
           </div>
           <button onClick={handleExit} style={{
             background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.12)',
-            color:'#7EC8FF', borderRadius:10, padding:'7px 14px',
+            color:C.sky, borderRadius:10, padding:'7px 14px',
             fontSize:12, fontWeight:600, cursor:'pointer',
           }}>✕ Quitter</button>
         </div>
@@ -5034,7 +4796,7 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
             width: total > 0 ? `${(done/total)*100}%` : '0%',
             background: allGone
               ? `linear-gradient(90deg, #3DA882, ${C.green})`
-              : `linear-gradient(90deg, ${C.accentDk}, #7EC8FF)`,
+              : `linear-gradient(90deg, ${C.accentDk}, ${C.sky})`,
           }} />
         </div>
       </div>
@@ -5944,6 +5706,74 @@ function SettingsBackupSection() {
   );
 }
 
+const CHANGELOG = [
+  ['3.5.4', 'Fix plantage note sur repas libre · noms de repas sur 2 lignes · nettoyage code mort et couleurs · journal complété'],
+  ['3.5.3', 'Import cantine : reconstruction des dates par la structure (5 jours consécutifs)'],
+  ['3.5.2', 'Import cantine : corrections OCR (mois, jours déformés) et fusion de lignes recalibrée'],
+  ['3.5.1', 'Import cantine : texte brut OCR consultable pour le diagnostic'],
+  ['3.5.0', 'Options en menu liste avec sous-écrans'],
+  ['3.4.2', 'Import cantine : fusion des lignes coupées et colonnes plafonnées'],
+  ['3.4.1', 'Import cantine : OCR embarqué (ML Kit) corrigé pour la compilation'],
+  ['3.4.0', 'Import cantine par photo avec OCR local (sans réseau ni clé API)'],
+  ['3.3.1', 'Bouton photo : sélecteur de fichiers Android réparé'],
+  ['3.3.0', 'Menus cantine : import par photo · affichage dans le Planning · correction par jour'],
+  ['3.2.1', 'Reporter : choix des repas à reporter à la semaine suivante'],
+  ['3.2.0', 'Bouton ↷ Reporter les repas non cuisinés vers la semaine suivante'],
+  ['3.1.3', 'Catégorie d\'un article modifiée : mot-clé ajouté + messages succès/échec'],
+  ['3.1.2', 'Ajout manuel d\'un article inconnu : fenêtre de choix de catégorie'],
+  ['3.1.1', 'Saisons : toggle rapide sur chaque carte recette'],
+  ['3.1.0', 'Saisons des recettes (4 saisons + Mixte) · filtre · tirage 🎲 pondéré par la saison'],
+  ['3.0.7', 'Fix catégorisation recette planning : enregistrement du mot-clé à la confirmation'],
+  ['3.0.6', 'Fix catégorisation recette planning : multiCatData données brutes (plus de closure stale)'],
+  ['3.0.5', 'Fix catégorisation : handleAdd sans catId · mergeOrAdd préserve catégorie existante'],
+  ['3.0.4', 'Score recettes basé sur date de cuisson (✓ coché) et non date de planification'],
+  ['3.0.3', 'Onglets Salé/Sucré · toggle 🧂🍰 sur chaque carte · classification rapide'],
+  ['3.0.2', 'En-têtes catégories courses : fond accentué + bordure gauche'],
+  ['3.0.1', 'Fix updateMealPersons repas personnalisés (null recipeId)'],
+  ['3.0.0', 'Ingrédients dans mode cuisine · Filtre tags AND'],
+  ['2.9.6', 'Retirer ingrédients de la liste depuis fiche recette'],
+  ['2.9.5', 'url dans snapshot · suppression console.error · INIT_ dead code · onDuplicate explicite'],
+  ['2.9.4', 'Badge ingrédients manquants · Timer mode cuisine'],
+  ['2.9.3', 'Fix saut de ligne avertissement éditeur · Tap zone étape mode cuisine'],
+  ['2.9.2', 'Ajouter à la liste depuis fiche recette · Mode cuisine plein écran'],
+  ['2.9.1', 'Fix planningTarget mode rolling · Orphelins search · scores custom meals'],
+  ['2.9.0', 'Repas sans recette · Recherche courses · Navigation semaine depuis WeeksBadge'],
+  ['2.8.0', 'Dupliquer → éditeur · Recatégorisation rétroactive · Annuler import · Tags RecipeCard · Tri jamais planifiées · Vider à la sortie mode courses'],
+  ['2.7.8', 'Dupliquer une recette · Partage liste courses enrichi'],
+  ['2.7.7', 'Tags RecipePicker dans les deux modes · Stats jamais planifiées → fiche recette'],
+  ['2.7.6', 'Taille du foyer configurable dans Options (défaut : 6)'],
+  ['2.7.5', 'RecipeEditor avertissement changements non sauvegardés · viewRecipe live'],
+  ['2.7.4', 'Suppression doubles confirmations deleteRecipe + clearAll'],
+  ['2.7.3', 'Retour inter-onglets via historique de navigation'],
+  ['2.7.2', 'Bouton retour Android via bridge JS (fix file:// popstate)'],
+  ['2.7.1', 'Bouton retour Android (toutes modals/overlays)'],
+  ['2.7.0', 'fromMealId (rescaling précis) · deleteRecipe undo · RecipeCard direct delete · RecipeDetail favori inline · null guards onEdit/onDelete · MIN_YEAR dynamique · weeksToShow · recipeScore O(N)'],
+  ['2.6.6', 'Alerte re-planification semaine consécutive'],
+  ['2.6.5', 'Suggestions recettes (tri ancienneté + filtres tags) · 🎲 tirage pondéré'],
+  ['2.6.4', 'Mode courses (overlay) · Note par repas · Tap = suppression en mode courses'],
+  ['2.6.3', 'Stats bar chart · Jamais planifiées → 📅 direct · Import timeout 30s + chrono'],
+  ['2.6.2', 'Tri recettes · Recherche par ingrédient · Feedback stepper 👥'],
+  ['2.6.1', 'Suppression parseHtml (code mort) · deleteMeal → snack + Annuler'],
+  ['2.6.0', 'Badge semaines planifiées dans la fiche recette'],
+  ['2.5.9', 'Gestion singulier/pluriel français (mots-clés + fusion)'],
+  ['2.5.8', 'Snacks succès/erreur sur toutes les actions · Détection quota localStorage'],
+  ['2.5.7', 'Snacks d\'erreur/info · unités incompatibles · ingrédients non ajoutés'],
+  ['2.5.6', 'Info-bulles fusion · Info-bulles mot-clé automatique'],
+  ['2.5.5', 'Fusion avec conversion d\'unités (g/kg, ml/cl/L) · Fusion sur articles recette'],
+  ['2.5.4', 'Fusion automatique des doublons dans la liste · Mise à jour mot-clé à l\'édition de catégorie'],
+  ['2.5.3', 'Mot-clé auto lors de l\'assignation d\'un article à une catégorie'],
+  ['2.5.2', 'Fix double ajout repas/ingrédients depuis fiche recette'],
+  ['2.5.1', 'Import HTML brut (Overblog, Canalblog…) · Fix @type URL schema · Extraction JSON Claude robustifiée'],
+  ['2.5.0', 'Ouvrir recette depuis planning · UX courses · Corrections'],
+  ['2.4.0', 'Catégorisation intelligente · Doublon import · Ordre rayons'],
+  ['2.3.0', 'Stepper portions · Multi-tags · Filtre ingrédients depuis recette'],
+  ['2.2.0', 'Persistance localStorage · Emoji libre'],
+  ['2.1.0', 'Édition catégories · Export/Import JSON'],
+  ['2.0.0', 'IngredientParser · EmojiGuesser · Jow API'],
+  ['1.9.0', 'Import recettes depuis sites web'],
+  ['1.8.0', 'Planning annuel · compacité · multi-ajout'],
+];
+
 function SettingsAboutSection() {
   return (
     <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16 }}>
@@ -5957,55 +5787,9 @@ function SettingsAboutSection() {
       <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
         <div style={{ fontSize:11, color:C.muted, fontWeight:600, marginBottom:6 }}>Historique</div>
         <div style={{ fontSize:11, color:C.muted, lineHeight:1.9 }}>
-            <span style={{ color:C.accent }}>1.8.0</span> — Planning annuel · compacité · multi-ajout<br/>
-            <span style={{ color:C.accent }}>1.9.0</span> — Import recettes depuis sites web<br/>
-            <span style={{ color:C.accent }}>2.0.0</span> — IngredientParser · EmojiGuesser · Jow API<br/>
-            <span style={{ color:C.accent }}>2.1.0</span> — Édition catégories · Export/Import JSON<br/>
-            <span style={{ color:C.accent }}>2.2.0</span> — Persistance localStorage · Emoji libre<br/>
-            <span style={{ color:C.accent }}>2.3.0</span> — Stepper portions · Multi-tags · Filtre ingrédients depuis recette<br/>
-            <span style={{ color:C.accent }}>2.4.0</span> — Catégorisation intelligente · Doublon import · Ordre rayons<br/>
-            <span style={{ color:C.accent }}>3.0.7</span> — Fix catégorisation recette planning : enregistrement du mot-clé à la confirmation<br/>
-            <span style={{ color:C.accent }}>3.0.6</span> — Fix catégorisation recette planning : multiCatData données brutes (plus de closure stale)<br/>
-            <span style={{ color:C.accent }}>3.0.5</span> — Fix catégorisation : handleAdd sans catId · mergeOrAdd préserve catégorie existante<br/>
-            <span style={{ color:C.accent }}>3.0.4</span> — Score recettes basé sur date de cuisson (✓ coché) et non date de planification<br/>
-            <span style={{ color:C.accent }}>3.0.3</span> — Onglets Salé/Sucré · toggle 🧂🍰 sur chaque carte · classification rapide<br/>
-            <span style={{ color:C.accent }}>3.0.2</span> — En-têtes catégories courses : fond accentué + bordure gauche<br/>
-            <span style={{ color:C.accent }}>3.0.1</span> — Fix updateMealPersons repas personnalisés (null recipeId)<br/>
-            <span style={{ color:C.accent }}>3.0.0</span> — Ingrédients dans mode cuisine · Filtre tags AND<br/>
-            <span style={{ color:C.accent }}>2.9.6</span> — Retirer ingrédients de la liste depuis fiche recette<br/>
-            <span style={{ color:C.accent }}>2.9.5</span> — url dans snapshot · suppression console.error · INIT_ dead code · onDuplicate explicite<br/>
-            <span style={{ color:C.accent }}>2.9.4</span> — Badge ingrédients manquants · Timer mode cuisine<br/>
-            <span style={{ color:C.accent }}>2.9.3</span> — Fix saut de ligne avertissement éditeur · Tap zone étape mode cuisine<br/>
-            <span style={{ color:C.accent }}>2.9.2</span> — Ajouter à la liste depuis fiche recette · Mode cuisine plein écran<br/>
-            <span style={{ color:C.accent }}>2.9.1</span> — Fix planningTarget mode rolling · Orphelins search · scores custom meals<br/>
-            <span style={{ color:C.accent }}>2.9.0</span> — Repas sans recette · Recherche courses · Navigation semaine depuis WeeksBadge<br/>
-            <span style={{ color:C.accent }}>2.8.0</span> — Dupliquer → éditeur · Recatégorisation rétroactive · Annuler import · Tags RecipeCard · Tri jamais planifiées · Vider à la sortie mode courses<br/>
-            <span style={{ color:C.accent }}>2.7.8</span> — Dupliquer une recette · Partage liste courses enrichi<br/>
-            <span style={{ color:C.accent }}>2.7.7</span> — Tags RecipePicker dans les deux modes · Stats jamais planifiées → fiche recette<br/>
-            <span style={{ color:C.accent }}>2.7.6</span> — Taille du foyer configurable dans Options (défaut : 6)<br/>
-            <span style={{ color:C.accent }}>2.7.5</span> — RecipeEditor avertissement changements non sauvegardés · viewRecipe live<br/>
-            <span style={{ color:C.accent }}>2.7.4</span> — Suppression doubles confirmations deleteRecipe + clearAll<br/>
-            <span style={{ color:C.accent }}>2.7.3</span> — Retour inter-onglets via historique de navigation<br/>
-            <span style={{ color:C.accent }}>2.7.2</span> — Bouton retour Android via bridge JS (fix file:// popstate)<br/>
-            <span style={{ color:C.accent }}>2.7.1</span> — Bouton retour Android (toutes modals/overlays)<br/>
-            <span style={{ color:C.accent }}>2.7.0</span> — fromMealId (rescaling précis) · deleteRecipe undo · RecipeCard direct delete · RecipeDetail favori inline · null guards onEdit/onDelete · MIN_YEAR dynamique · weeksToShow · recipeScore O(N)<br/>
-            <span style={{ color:C.accent }}>2.6.6</span> — Alerte re-planification semaine consécutive<br/>
-            <span style={{ color:C.accent }}>2.6.5</span> — Suggestions recettes (tri ancienneté + filtres tags) · 🎲 tirage pondéré<br/>
-            <span style={{ color:C.accent }}>2.6.4</span> — Mode courses (overlay) · Note par repas · Tap = suppression en mode courses<br/>
-            <span style={{ color:C.accent }}>2.6.3</span> — Stats bar chart · Jamais planifiées → 📅 direct · Import timeout 30s + chrono<br/>
-            <span style={{ color:C.accent }}>2.6.2</span> — Tri recettes · Recherche par ingrédient · Feedback stepper 👥<br/>
-            <span style={{ color:C.accent }}>2.6.1</span> — Suppression parseHtml (code mort) · deleteMeal → snack + Annuler<br/>
-            <span style={{ color:C.accent }}>2.6.0</span> — Badge semaines planifiées dans la fiche recette<br/>
-            <span style={{ color:C.accent }}>2.5.9</span> — Gestion singulier/pluriel français (mots-clés + fusion)<br/>
-            <span style={{ color:C.accent }}>2.5.8</span> — Snacks succès/erreur sur toutes les actions · Détection quota localStorage<br/>
-            <span style={{ color:C.accent }}>2.5.7</span> — Snacks d'erreur/info · unités incompatibles · ingrédients non ajoutés<br/>
-            <span style={{ color:C.accent }}>2.5.6</span> — Info-bulles fusion · Info-bulles mot-clé automatique<br/>
-            <span style={{ color:C.accent }}>2.5.5</span> — Fusion avec conversion d'unités (g/kg, ml/cl/L) · Fusion sur articles recette<br/>
-            <span style={{ color:C.accent }}>2.5.4</span> — Fusion automatique des doublons dans la liste · Mise à jour mot-clé à l'édition de catégorie<br/>
-            <span style={{ color:C.accent }}>2.5.3</span> — Mot-clé auto lors de l'assignation d'un article à une catégorie<br/>
-            <span style={{ color:C.accent }}>2.5.2</span> — Fix double ajout repas/ingrédients depuis fiche recette<br/>
-            <span style={{ color:C.accent }}>2.5.1</span> — Import HTML brut (Overblog, Canalblog…) · Fix @type URL schema · Extraction JSON Claude robustifiée<br/>
-            <span style={{ color:C.accent }}>2.5.0</span> — Ouvrir recette depuis planning · UX courses · Corrections
+          {CHANGELOG.map(([v, t]) => (
+            <div key={v}><span style={{ color:C.accent }}>{v}</span> — {t}</div>
+          ))}
         </div>
       </div>
     </div>
