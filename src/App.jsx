@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.6.0"; // v73
+const VERSION = "3.7.0"; // v74
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -695,16 +695,23 @@ function AppProvider({ children }) {
     setCats(p => [...p, { id, name, emoji, kw, order: p.length }]);
   const deleteCat = id => {
     const cat      = cats.find(c => c.id === id);
+    if (!cat) return;
     const fb       = cats.find(c => c.id !== id && (!c.kw || c.kw.length === 0))?.id ?? cats.find(c => c.id !== id)?.id;
-    const nMoved   = shopping.filter(s => s.categoryId === id).length;
+    const movedIds = shopping.filter(s => s.categoryId === id).map(s => s.id);
+    const nMoved   = movedIds.length;
     setCats(p => p.filter(c => c.id !== id));
     setShopping(p => p.map(s => s.categoryId === id ? { ...s, categoryId: fb } : s));
     const suffix = nMoved > 0 ? ` · ${nMoved} article${nMoved>1?'s':''} déplacés` : '';
-    showSnack(`"${cat?.name || 'Catégorie'}" supprimée${suffix}`);
+    showSnack(`🗑 "${cat.name}" supprimée${suffix}`, () => {
+      // Annuler : la catégorie revient à sa place (son champ order est conservé) avec ses mots-clés
+      setCats(p => p.some(c => c.id === cat.id) ? p : [...p, cat]);
+      setShopping(p => p.map(s => movedIds.includes(s.id) ? { ...s, categoryId: cat.id } : s));
+    });
   };
   const updateCat = c => {
     const oldCat  = cats.find(x => x.id === c.id);
     const newKws  = (c.kw || []).filter(k => !(oldCat?.kw || []).includes(k));
+    let nMoved = 0;
     setCats(p => p.map(x => x.id === c.id ? c : x));
     // Recatégorisation rétroactive : articles existants qui matchent les nouveaux mots-clés
     if (newKws.length > 0) {
@@ -713,6 +720,7 @@ function AppProvider({ children }) {
         newKws.some(k => matchesKeyword(s.name.toLowerCase(), k))
       );
       if (toRec.length > 0) {
+        nMoved = toRec.length;
         const prev = toRec.map(s => ({ id: s.id, categoryId: s.categoryId }));
         setShopping(p => p.map(s => toRec.some(t => t.id === s.id) ? { ...s, categoryId: c.id } : s));
         showSnack(
@@ -721,6 +729,7 @@ function AppProvider({ children }) {
         );
       }
     }
+    return nMoved; // permet à l'appelant de ne pas écraser le message « articles déplacés »
   };
   /**
    * Ajoute UN mot-clé à une catégorie sans déclencher le balayage rétroactif de updateCat.
@@ -5691,82 +5700,162 @@ function SettingsAppearanceSection() {
 }
 
 function SettingsCategoriesSection() {
-  const { cats, deleteCat, reorderCats } = useApp();
-  const [editCat, setEditCat] = useState(null);
-  const [addOpen, setAddOpen] = useState(false);
+  const { cats, shopping, reorderCats } = useApp();
+  const [editCat,  setEditCat]  = useState(null);
+  const [addOpen,  setAddOpen]  = useState(false);
+  const [testName, setTestName] = useState('');
+  const [dragId,   setDragId]   = useState(null);
+  const [overId,   setOverId]   = useState(null);
+  const [overPos,  setOverPos]  = useState('before');
   const sorted = useMemo(() => [...cats].sort((a,b) => a.order-b.order), [cats]);
 
-  const moveCat = (id, dir) => {
-    const list = [...cats].sort((a,b) => a.order - b.order);
-    const idx  = list.findIndex(c => c.id === id);
-    const next = idx + dir;
-    if (next < 0 || next >= list.length) return;
-    [list[idx], list[next]] = [list[next], list[idx]];
-    reorderCats(list);
+  // Nombre d'articles de la liste actuelle par catégorie
+  const counts = useMemo(() => {
+    const m = {};
+    shopping.forEach(s => { m[s.categoryId] = (m[s.categoryId] || 0) + 1; });
+    return m;
+  }, [shopping]);
+
+  // « Où serait rangé cet article ? » — même logique que l'ajout manuel
+  const testTrim = testName.trim();
+  const testResult = useMemo(() => {
+    if (!testTrim) return null;
+    const low  = testTrim.toLowerCase();
+    const cat  = cats.find(c => c.id === categorize(testTrim, cats));
+    const matched = hasKeywordMatch(testTrim, cats);
+    const kw = matched ? cat?.kw?.find(k => matchesKeyword(low, k.toLowerCase())) : null;
+    return { cat, matched, kw };
+  }, [testTrim, cats]);
+
+  // ── Glisser-déposer (même principe que dans l'onglet Courses) ──
+  const autoScroll = (e) => {
+    const main = document.querySelector('main');
+    if (!main) return;
+    if (e.clientY < 120) main.scrollTop -= 14;
+    else if (e.clientY > window.innerHeight - 130) main.scrollTop += 14;
   };
+  const onDragStart = (e, id) => {
+    setDragId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', id); } catch {}
+  };
+  const onDragOver = (e, id) => {
+    e.preventDefault();
+    if (!dragId || dragId === id) return;
+    autoScroll(e);
+    const r = e.currentTarget.getBoundingClientRect();
+    setOverId(id);
+    setOverPos(e.clientY > r.top + r.height / 2 ? 'after' : 'before');
+  };
+  const onDrop = (e, targetId) => {
+    e.preventDefault();
+    const fromId = dragId;
+    setDragId(null); setOverId(null);
+    if (!fromId || fromId === targetId) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const after = e.clientY > r.top + r.height / 2;
+    const moving  = sorted.find(c => c.id === fromId);
+    const without = sorted.filter(c => c.id !== fromId);
+    let idx = without.findIndex(c => c.id === targetId);
+    if (idx < 0 || !moving) return;
+    if (after) idx += 1;
+    without.splice(idx, 0, moving);
+    reorderCats(without);
+  };
+  const onDragEnd = () => { setDragId(null); setOverId(null); };
+
+  const plural = (n, one, many) => `${n} ${n > 1 ? many : one}`;
 
   return (
     <>
-      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
-        <Btn onClick={() => setAddOpen(true)} variant="primary" small>+ Nouvelle</Btn>
+      {/* Test : où serait rangé un article ? */}
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:C.rBig, padding:12, marginBottom:14 }}>
+        <input
+          value={testName} onChange={e => setTestName(e.target.value)}
+          placeholder="🔍 Tester un article (ex : mozzarella)"
+          style={{
+            width:'100%', padding:'9px 12px', background:C.bg, border:`1px solid ${C.border}`,
+            borderRadius:C.rBtn, color:C.text, fontSize:13, outline:'none', fontFamily:'inherit',
+          }}
+        />
+        {testResult ? (
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:10, flexWrap:'wrap' }}>
+            <span style={{
+              fontSize:13, fontWeight:600, borderRadius:C.rBtn, padding:'5px 12px',
+              background: testResult.matched ? C.accent : C.orangeBg,
+              color:      testResult.matched ? C.onAccent : C.orange,
+            }}>{testResult.cat?.emoji} {testResult.cat?.name}</span>
+            <span style={{ fontSize:12, color:C.muted, flex:1, minWidth:120, lineHeight:1.4 }}>
+              {testResult.matched
+                ? <>Mot-clé : « {testResult.kw} »</>
+                : "Aucun mot-clé ne correspond : à l'ajout, l'appli te demandera le rayon."}
+            </span>
+          </div>
+        ) : (
+          <div style={{ fontSize:11, color:C.muted, marginTop:7 }}>Vérifie dans quel rayon un article serait rangé, sans rien modifier.</div>
+        )}
       </div>
-      <div style={{
-        background:C.accentBg, border:`1px solid ${C.accent}33`,
-        borderRadius:10, padding:'8px 12px', marginBottom:10,
-        display:'flex', gap:8, alignItems:'center',
-      }}>
-        <span style={{ fontSize:15 }}>🛒</span>
-        <span style={{ fontSize:12, color:C.soft, lineHeight:1.5 }}>
-          Glisse ≡ ou utilise ▲▼ pour définir l'ordre des rayons — il s'applique automatiquement dans la liste de courses.
-        </span>
+
+      <div style={{ fontSize:11, color:C.muted, letterSpacing:'0.05em', fontWeight:600, padding:'0 4px 8px' }}>
+        ORDRE DES RAYONS · MAINTIENS ⋮⋮ PUIS GLISSE
       </div>
-      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:'4px 0' }}>
-        {sorted.map((cat, idx) => (
+
+      {sorted.map(cat => {
+        const isDefault = cat.name === 'Autre';
+        const nKw  = cat.kw?.length || 0;
+        const nArt = counts[cat.id] || 0;
+        const isOver = overId === cat.id && dragId && dragId !== cat.id;
+        return (
           <div key={cat.id}
+            draggable
+            onDragStart={e => onDragStart(e, cat.id)}
+            onDragOver={e => onDragOver(e, cat.id)}
+            onDrop={e => onDrop(e, cat.id)}
+            onDragEnd={onDragEnd}
+            onClick={() => setEditCat(cat)}
             style={{
-              display:'flex', alignItems:'center', gap:8, padding:'9px 12px',
-              borderBottom: idx<sorted.length-1 ? `1px solid ${C.border}` : 'none',
+              display:'flex', alignItems:'center', gap:10, padding:'10px 12px', marginBottom:6,
+              background: dragId === cat.id ? C.cardHov : C.card,
+              border:`1px solid ${C.border}`, borderRadius:C.rBig, cursor:'pointer',
+              opacity: dragId === cat.id ? 0.5 : 1,
+              boxShadow: isOver ? `0 ${overPos === 'before' ? '-' : ''}2px 0 ${C.accent}` : 'none',
+              transition:'opacity 0.12s',
             }}>
-            <span style={{ fontSize:11, color:C.muted, minWidth:16, textAlign:'right', flexShrink:0 }}>{idx+1}</span>
-            <span style={{ fontSize:20, flexShrink:0 }}>{cat.emoji}</span>
+            <svg width="16" height="22" viewBox="0 0 16 22" fill={C.muted} aria-hidden="true" style={{ flexShrink:0, cursor:'grab' }}>
+              <circle cx="4" cy="5" r="1.6"/><circle cx="12" cy="5" r="1.6"/>
+              <circle cx="4" cy="11" r="1.6"/><circle cx="12" cy="11" r="1.6"/>
+              <circle cx="4" cy="17" r="1.6"/><circle cx="12" cy="17" r="1.6"/>
+            </svg>
+            <span style={{
+              width:38, height:38, borderRadius:12, background:C.accentBg, flexShrink:0,
+              display:'flex', alignItems:'center', justifyContent:'center', fontSize:20,
+            }}>{cat.emoji}</span>
             <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontWeight:500, color:C.text, fontSize:13 }}>{cat.name}</div>
-              <div style={{ fontSize:11, color:C.muted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                {cat.kw?.length > 0 ? cat.kw.slice(0,5).join(', ') + (cat.kw.length > 5 ? '…' : '') : 'Aucun mot-clé'}
+              <div style={{ fontWeight:600, color:C.text, fontSize:14, display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{cat.name}</span>
+                {isDefault && (
+                  <span style={{ fontSize:10, color:C.muted, border:`1px solid ${C.border}`, borderRadius:10, padding:'1px 7px', flexShrink:0 }}>par défaut</span>
+                )}
+              </div>
+              <div style={{ fontSize:12, color:C.muted, marginTop:1 }}>
+                {isDefault
+                  ? `Reçoit les articles sans rayon · ${plural(nArt, 'article', 'articles')}`
+                  : `${plural(nKw, 'mot-clé', 'mots-clés')} · ${plural(nArt, 'article', 'articles')}`}
               </div>
             </div>
-            <div style={{ display:'flex', flexDirection:'column', gap:2, flexShrink:0 }}>
-              <button onClick={() => moveCat(cat.id, -1)} disabled={idx===0} style={{
-                background: idx===0 ? 'transparent' : C.border, border:'none',
-                color: idx===0 ? C.border : C.soft, borderRadius:4,
-                width:22, height:18, fontSize:10, cursor: idx===0?'default':'pointer',
-                lineHeight:1, padding:0, fontFamily:'inherit',
-              }}>▲</button>
-              <button onClick={() => moveCat(cat.id, +1)} disabled={idx===sorted.length-1} style={{
-                background: idx===sorted.length-1 ? 'transparent' : C.border, border:'none',
-                color: idx===sorted.length-1 ? C.border : C.soft, borderRadius:4,
-                width:22, height:18, fontSize:10, cursor: idx===sorted.length-1?'default':'pointer',
-                lineHeight:1, padding:0, fontFamily:'inherit',
-              }}>▼</button>
-            </div>
-            <button onClick={() => setEditCat(cat)} style={{
-              background:C.accentBg, border:`1px solid ${C.accent}33`, color:C.accent,
-              borderRadius:7, padding:'4px 10px', cursor:'pointer', fontSize:12, flexShrink:0,
-            }}>✏️</button>
-            {cat.name !== 'Autre' && (
-              <button onClick={() => deleteCat(cat.id)} style={{
-                background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:16, opacity:0.7, flexShrink:0,
-              }}>×</button>
-            )}
+            <span style={{ color:C.muted, fontSize:22, flexShrink:0, lineHeight:1 }}>›</span>
           </div>
-        ))}
-      </div>
-      {editCat && (
-        <CategoryEditModal cat={editCat} onClose={() => setEditCat(null)} />
-      )}
-      {addOpen && (
-        <CategoryAddModal onClose={() => setAddOpen(false)} />
-      )}
+        );
+      })}
+
+      <button onClick={() => setAddOpen(true)} style={{
+        width:'100%', marginTop:6, padding:'13px 0', background:'transparent',
+        border:`1px dashed ${C.ring}`, borderRadius:C.rBig, color:C.accent,
+        fontSize:14, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+      }}>+ Nouvelle catégorie</button>
+
+      {editCat && <CategoryForm cat={editCat} onClose={() => setEditCat(null)} />}
+      {addOpen && <CategoryForm cat={null} onClose={() => setAddOpen(false)} />}
     </>
   );
 }
@@ -5909,6 +5998,7 @@ function SettingsBackupSection() {
 }
 
 const CHANGELOG = [
+  ['3.7.0', 'Catégories : liste glisser-déposer avec compteurs, test d\'un article, éditeur à pastilles, suppression annulable'],
   ['3.6.0', 'Thèmes : Classique (inchangé) et Minuit (nouveau) au choix dans Options > Apparence'],
   ['3.5.4', 'Fix plantage note sur repas libre · noms de repas sur 2 lignes · nettoyage code mort et couleurs · journal complété'],
   ['3.5.3', 'Import cantine : reconstruction des dates par la structure (5 jours consécutifs)'],
@@ -5999,92 +6089,192 @@ function SettingsAboutSection() {
   );
 }
 
-function CategoryEditModal({ cat, onClose }) {
-  const { updateCat, showSnack } = useApp();
-  const [emoji, setEmoji] = useState(cat.emoji || '📦');
-  const [name,  setName]  = useState(cat.name || '');
-  const [kwStr, setKwStr] = useState((cat.kw || []).join(', '));
-  const inp = { padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none', width:'100%' };
+// Emojis proposés pour une catégorie de courses (la saisie libre reste possible)
+const CAT_EMOJIS_QUICK = ['🥩','🥦','🧀','🥚','🍝','🫙'];
+const CAT_EMOJIS_ALL = [
+  '🥩','🍗','🐟','🦐','🥦','🥕','🍅','🍎','🍌','🍇','🥬','🍋',
+  '🧀','🥛','🧈','🥚','🍝','🍚','🥖','🥐','🫙','🧂','🍯','🥫',
+  '🍶','🥤','🍷','☕','🧃','🍫','🍪','🍦','🧊','🌿','🧴','🧻',
+  '🧼','🐶','🐱','👶','💊','🛍️','📦','🎉',
+];
 
-  const save = () => {
-    if (!name.trim()) return;
-    updateCat({ ...cat, emoji, name:name.trim(), kw:kwStr.split(/[,\n]+/).map(k=>k.trim().toLowerCase()).filter(Boolean) });
-    showSnack('✅ Catégorie mise à jour');
-    onClose();
-  };
-
-  return (
-    <BottomSheet title={`Modifier la catégorie`} onClose={onClose}>
-      <div style={{ padding:16 }}>
-        <div style={{ display:'flex', gap:12, alignItems:'flex-start', marginBottom:16 }}>
-          <EmojiInput value={emoji} onChange={setEmoji} />
-          <div style={{ flex:1 }}>
-            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom</label>
-            <input value={name} onChange={e=>setName(e.target.value)} style={inp} />
-          </div>
-        </div>
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>
-            🔑 Mots-clés <span style={{ fontWeight:400 }}>(séparés par virgule)</span>
-          </label>
-          <textarea value={kwStr} onChange={e=>setKwStr(e.target.value)} rows={4}
-            placeholder="poulet, bœuf, saumon, dinde..."
-            style={{ ...inp, resize:'vertical', lineHeight:1.7 }}
-          />
-          <div style={{ fontSize:11, color:C.muted, marginTop:5, lineHeight:1.5 }}>
-            Les articles dont le nom contient un de ces mots sont classés automatiquement dans cette catégorie.
-          </div>
-        </div>
-        <Btn onClick={save} variant="primary" disabled={!name.trim()} style={{ width:'100%', justifyContent:'center' }}>
-          Enregistrer
-        </Btn>
-      </div>
-    </BottomSheet>
-  );
+/** Mots-clés saisis → liste propre (minuscules, sans doublon, séparés par , ; ou retour ligne) */
+function splitKeywords(raw) {
+  return String(raw).split(/[,;\n]+/).map(k => k.trim().toLowerCase()).filter(Boolean);
 }
 
-function CategoryAddModal({ onClose }) {
-  const { addCat, showSnack } = useApp();
-  const [emoji, setEmoji] = useState('📦');
-  const [name,  setName]  = useState('');
-  const [kwStr, setKwStr] = useState('');
-  const inp = { padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none', width:'100%' };
+/** Création / édition d'une catégorie de courses (feuille du bas) */
+function CategoryForm({ cat, onClose }) {
+  const { cats, shopping, addCat, updateCat, deleteCat, showSnack } = useApp();
+  const isEdit = !!cat;
+  const isDefault = cat?.name === 'Autre';
+  const [emoji,      setEmoji]      = useState(cat?.emoji || '📦');
+  const [name,       setName]       = useState(cat?.name || '');
+  const [kws,        setKws]        = useState(cat?.kw || []);
+  const [kwInput,    setKwInput]    = useState('');
+  const [showAllKw,  setShowAllKw]  = useState(false);
+  const [emojiOpen,  setEmojiOpen]  = useState(false);
 
-  const create = () => {
-    if (!name.trim()) return;
-    addCat({ name:name.trim(), emoji, kw:kwStr.split(/[,\n]+/).map(k=>k.trim().toLowerCase()).filter(Boolean) });
-    showSnack(`✅ Catégorie "${name.trim()}" créée`);
+  const inp = {
+    padding:'10px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:C.rBtn + 3,
+    color:C.text, fontSize:14, outline:'none', width:'100%', fontFamily:'inherit',
+  };
+
+  // Ajoute un ou plusieurs mots-clés ; retourne la liste à jour
+  const addKw = (raw) => {
+    const incoming = splitKeywords(raw);
+    const next = [...kws];
+    incoming.forEach(k => { if (!next.includes(k)) next.push(k); });
+    if (next.length !== kws.length) setKws(next);
+    setKwInput('');
+    return next;
+  };
+  const removeKw = (k) => setKws(list => list.filter(x => x !== k));
+
+  const save = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const finalKws = kwInput.trim() ? addKw(kwInput) : kws;
+    if (isEdit) {
+      const moved = updateCat({ ...cat, emoji, name:trimmed, kw:finalKws });
+      // updateCat affiche déjà son propre message (avec Annuler) quand des articles sont déplacés
+      if (!moved) showSnack('✅ Catégorie mise à jour');
+    } else {
+      addCat({ name:trimmed, emoji, kw:finalKws });
+      showSnack(`✅ Catégorie "${trimmed}" créée`);
+    }
     onClose();
   };
 
+  const remove = () => {
+    deleteCat(cat.id);   // message avec bouton Annuler
+    onClose();
+  };
+
+  const quick = CAT_EMOJIS_QUICK.includes(emoji) ? CAT_EMOJIS_QUICK : [emoji, ...CAT_EMOJIS_QUICK.slice(0, 5)];
+  const visibleKws = showAllKw ? kws : kws.slice(0, 8);
+  const hiddenCount = kws.length - visibleKws.length;
+  const nArt = isEdit ? shopping.filter(s => s.categoryId === cat.id).length : 0;
+  const fbCat = isEdit
+    ? (cats.find(c => c.id !== cat.id && (!c.kw || c.kw.length === 0)) || cats.find(c => c.id !== cat.id))
+    : null;
+
+  const emojiChip = (e) => (
+    <button key={e} onClick={() => setEmoji(e)} style={{
+      width:38, height:38, borderRadius:12, fontSize:19, cursor:'pointer', fontFamily:'inherit',
+      background: emoji === e ? C.accentBg : C.bg,
+      border:`1px solid ${emoji === e ? C.accent : C.border}`,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:0,
+    }}>{e}</button>
+  );
+
   return (
-    <BottomSheet title="Nouvelle catégorie" onClose={onClose}>
+    <BottomSheet title={isEdit ? 'Modifier la catégorie' : 'Nouvelle catégorie'} onClose={onClose}>
       <div style={{ padding:16 }}>
-        <div style={{ display:'flex', gap:12, alignItems:'flex-start', marginBottom:16 }}>
-          <EmojiInput value={emoji} onChange={setEmoji} />
+        {/* Emoji + nom */}
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:12 }}>
+          <span style={{
+            width:56, height:56, borderRadius:18, background:C.accentBg, border:`1px solid ${C.accent}44`,
+            display:'flex', alignItems:'center', justifyContent:'center', fontSize:30, flexShrink:0,
+          }}>{emoji}</span>
           <div style={{ flex:1 }}>
-            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>Nom *</label>
-            <input value={name} onChange={e=>setName(e.target.value)}
-              placeholder="Surgelés, Épices, Apéro..."
-              style={inp}
-            />
+            <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:4 }}>Nom</label>
+            <input value={name} onChange={e => setName(e.target.value)}
+              placeholder="Surgelés, Épices, Apéro…" style={inp} />
           </div>
         </div>
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>
-            🔑 Mots-clés <span style={{ fontWeight:400 }}>(séparés par virgule)</span>
-          </label>
-          <textarea value={kwStr} onChange={e=>setKwStr(e.target.value)} rows={4}
-            placeholder="tofu, tempeh, seitan, edamame..."
-            style={{ ...inp, resize:'vertical', lineHeight:1.7 }}
+
+        {/* Emojis suggérés */}
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom: emojiOpen ? 8 : 18 }}>
+          {quick.map(emojiChip)}
+          <button onClick={() => setEmojiOpen(o => !o)} style={{
+            height:38, padding:'0 12px', borderRadius:12, fontSize:12, cursor:'pointer', fontFamily:'inherit',
+            background:'transparent', border:`1px solid ${C.border}`, color:C.muted,
+          }}>{emojiOpen ? 'Moins' : 'Plus'}</button>
+        </div>
+        {emojiOpen && (
+          <div style={{ background:C.bg, border:`1px solid ${C.border}`, borderRadius:C.rBtn + 3, padding:10, marginBottom:18 }}>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>{CAT_EMOJIS_ALL.map(emojiChip)}</div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:10 }}>
+              <span style={{ fontSize:12, color:C.muted }}>Autre emoji</span>
+              <input value="" onChange={e => { const v = e.target.value.trim(); if (v) setEmoji(Array.from(v).slice(0, 2).join('')); }}
+                placeholder="Colle-le ici" style={{ ...inp, width:110, padding:'6px 10px', fontSize:13 }} />
+            </div>
+          </div>
+        )}
+
+        {/* Mots-clés */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8 }}>
+          <span style={{ fontSize:14, color:C.text, fontWeight:600 }}>🔑 Mots-clés</span>
+          <span style={{ fontSize:12, color:C.muted }}>{kws.length}</span>
+        </div>
+        <div style={{ display:'flex', gap:6, alignItems:'center', background:C.bg, border:`1px solid ${C.border}`, borderRadius:C.rBtn + 3, padding:'4px 4px 4px 12px', marginBottom:10 }}>
+          <input
+            value={kwInput}
+            onChange={e => {
+              const v = e.target.value;
+              if (/[,;\n]/.test(v)) addKw(v); else setKwInput(v);
+            }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addKw(kwInput); } }}
+            placeholder="Ajouter un mot-clé…"
+            style={{ flex:1, minWidth:0, background:'transparent', border:'none', outline:'none', color:C.text, fontSize:14, padding:'6px 0', fontFamily:'inherit' }}
           />
-          <div style={{ fontSize:11, color:C.muted, marginTop:5, lineHeight:1.5 }}>
-            Facultatif — les articles contenant ces mots seront classés ici automatiquement.
-          </div>
+          <button onClick={() => addKw(kwInput)} aria-label="Ajouter le mot-clé" style={{
+            width:34, height:34, borderRadius:'50%', border:'none', cursor:'pointer', fontSize:20, lineHeight:1,
+            background:C.accentDk, color:C.onAccent, flexShrink:0, fontFamily:'inherit',
+          }}>+</button>
         </div>
-        <Btn onClick={create} variant="primary" disabled={!name.trim()} style={{ width:'100%', justifyContent:'center' }}>
-          Créer la catégorie
+        {kws.length === 0 ? (
+          <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>Aucun mot-clé pour l'instant.</div>
+        ) : (
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6 }}>
+            {visibleKws.map(k => (
+              <span key={k} style={{
+                display:'inline-flex', alignItems:'center', gap:4, fontSize:13, color:C.text,
+                background:C.cardHov, borderRadius:14, padding:'5px 6px 5px 12px',
+              }}>
+                {k}
+                <button onClick={() => removeKw(k)} aria-label={`Retirer ${k}`} style={{
+                  background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16, lineHeight:1, padding:'0 4px', fontFamily:'inherit',
+                }}>×</button>
+              </span>
+            ))}
+            {hiddenCount > 0 && (
+              <button onClick={() => setShowAllKw(true)} style={{
+                fontSize:12, color:C.accent, background:'transparent', border:`1px solid ${C.border}`,
+                borderRadius:14, padding:'5px 12px', cursor:'pointer', fontFamily:'inherit',
+              }}>Voir les {hiddenCount} autres</button>
+            )}
+            {showAllKw && kws.length > 8 && (
+              <button onClick={() => setShowAllKw(false)} style={{
+                fontSize:12, color:C.muted, background:'transparent', border:`1px solid ${C.border}`,
+                borderRadius:14, padding:'5px 12px', cursor:'pointer', fontFamily:'inherit',
+              }}>Réduire</button>
+            )}
+          </div>
+        )}
+        <div style={{ fontSize:12, color:C.muted, lineHeight:1.5, marginBottom:18 }}>
+          {isDefault
+            ? "« Autre » reçoit les articles qui ne correspondent à aucun mot-clé."
+            : 'Un article dont le nom contient un de ces mots est rangé ici automatiquement.'}
+        </div>
+
+        <Btn onClick={save} variant="primary" disabled={!name.trim()} style={{ width:'100%', justifyContent:'center', padding:'12px 18px' }}>
+          {isEdit ? 'Enregistrer' : 'Créer la catégorie'}
         </Btn>
+
+        {isEdit && !isDefault && (
+          <div style={{ textAlign:'center', marginTop:12 }}>
+            <button onClick={remove} style={{
+              background:'none', border:'none', color:C.red, fontSize:14, cursor:'pointer', padding:'8px 12px', fontFamily:'inherit',
+            }}>Supprimer la catégorie</button>
+            <div style={{ fontSize:11, color:C.muted, marginTop:2, lineHeight:1.5 }}>
+              {nArt > 0 && fbCat
+                ? `Les ${nArt} article${nArt > 1 ? 's' : ''} de la liste passent dans « ${fbCat.name} ». Tu peux annuler.`
+                : 'Tu peux annuler juste après.'}
+            </div>
+          </div>
+        )}
       </div>
     </BottomSheet>
   );
