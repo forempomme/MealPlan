@@ -1,9 +1,9 @@
-import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect } from "react"; // v20
+import { useState, useRef, useMemo, useCallback, createContext, useContext, useEffect, Component } from "react"; // v20
 
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.7.0"; // v74
+const VERSION = "3.7.1"; // v75
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -422,6 +422,57 @@ function loadFromStorage(key, defaultValue) {
   return _mem[key] !== undefined ? _mem[key] : defaultValue;
 }
 
+// ── Sauvegarde / restauration : outils partagés (écran Options ET écran de secours) ──
+const PRE_IMPORT_KEY = 'mp_pre_import'; // copie des données d'avant le dernier import
+const BACKUP_KEYS = ['recipes', 'meals', 'shopping', 'cats', 'settings', 'cantine'];
+
+/**
+ * Enregistre un fichier texte. Sur Android : fenêtre « Enregistrer sous » du système
+ * (pont natif saveFile, fiable dans la WebView). Dans un navigateur : téléchargement classique.
+ * Résolu avec { ok } | { cancelled } | { error }.
+ */
+function saveTextFile(filename, text) {
+  return new Promise(resolve => {
+    if (window.Android && typeof window.Android.saveFile === 'function') {
+      const cbId = 'sv' + Date.now();
+      window.__mpSave = window.__mpSave || {};
+      window.__mpSave[cbId] = res => resolve(res || { error: 'réponse vide' });
+      try { window.Android.saveFile(filename, text, cbId); }
+      catch (e) { delete window.__mpSave[cbId]; resolve({ error: e.message || 'pont indisponible' }); }
+      return;
+    }
+    try {
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      resolve({ ok: true });
+    } catch (e) { resolve({ error: e.message || 'téléchargement impossible' }); }
+  });
+}
+
+/** Vérifie qu'un JSON ressemble à une sauvegarde Meal Plan AVANT de toucher aux données. */
+function validateBackup(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data))
+    return { error: 'Ce fichier n\u2019est pas une sauvegarde Meal Plan.' };
+  const need = { recipes: ['id','name'], meals: ['id','weekKey'], shopping: ['id','name'], cats: ['id','name'], cantine: ['date'] };
+  const counts = {};
+  for (const k of Object.keys(need)) {
+    if (data[k] === undefined) continue;
+    if (!Array.isArray(data[k])) return { error: `Section « ${k} » illisible : le fichier est abîmé.` };
+    for (const it of data[k]) {
+      if (!it || typeof it !== 'object' || need[k].some(f => typeof it[f] !== 'string' || !it[f]))
+        return { error: `Section « ${k} » : un élément est incomplet. Fichier abîmé ou modifié.` };
+    }
+    counts[k] = data[k].length;
+  }
+  if (data.settings !== undefined && (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings)))
+    return { error: 'Section « settings » illisible : le fichier est abîmé.' };
+  if (!Object.keys(counts).length) return { error: 'Aucune donnée Meal Plan reconnue dans ce fichier.' };
+  return { ok: true, counts, exportDate: data.exportDate || null, version: data.version || null };
+}
+
 // ══════════════════════════════════════════════════════
 //  CONTEXT
 // ══════════════════════════════════════════════════════
@@ -438,6 +489,10 @@ function AppProvider({ children }) {
   // Thème appliqué AVANT le rendu des enfants (C est lu pendant leur rendu)
   applyTheme(settings.theme);
   const [planningTarget, setPlanningTarget] = useState(null); // weekKey cible pour navigation
+  const [preImport, setPreImport] = useState(() => {
+    const v = loadFromStorage(PRE_IMPORT_KEY, null);
+    return v && v.data ? { date: v.date } : null;
+  });
 
   const [snack,    setSnack]    = useState(null);
   const snackRef = useRef(null);
@@ -608,8 +663,9 @@ function AppProvider({ children }) {
   const duplicateWeek = (from, to) => {
     const src = meals.filter(m => m.weekKey === from);
     if (!src.length) { showSnack('ℹ️ Aucun repas à dupliquer sur cette semaine'); return; }
-    setMeals(p => [...p, ...src.map(m => ({ ...m, id: genId(), weekKey: to, done: false, addedAt: ts() }))]);
-    showSnack(`✅ ${src.length} repas dupliqués`);
+    const copies = src.map(m => ({ ...m, id: genId(), weekKey: to, done: false, addedAt: ts() }));
+    setMeals(p => [...p, ...copies]);
+    showSnack(`✅ ${src.length} repas dupliqués`, () => setMeals(p => p.filter(m => !copies.some(c => c.id === m.id))));
   };
 
   /** Reporte les repas sélectionnés (par id) d'une semaine vers la semaine suivante. */
@@ -769,8 +825,9 @@ function AppProvider({ children }) {
     });
   };
   const deleteCantineDay = (date) => {
+    const removed = cantine.filter(c => c.date === date);
     setCantine(p => p.filter(c => c.date !== date));
-    showSnack('🗑 Menu supprimé');
+    showSnack('🗑 Menu supprimé', () => setCantine(p => [...p.filter(c => !removed.some(r => r.id === c.id)), ...removed]));
   };
   const clearCantine = () => {
     if (!cantine.length) { showSnack('ℹ️ Aucun menu enregistré'); return; }
@@ -781,13 +838,37 @@ function AppProvider({ children }) {
 
   const updSettings = patch => setSettings(p => ({ ...p, ...patch }));
 
+  /** Applique les sections présentes (les absentes ne sont pas touchées). */
+  const applyBackup = (d) => {
+    if (Array.isArray(d.recipes))  setRecipes(d.recipes);
+    if (Array.isArray(d.meals))    setMeals(d.meals);
+    if (Array.isArray(d.shopping)) setShopping(d.shopping);
+    if (Array.isArray(d.cats))     setCats(d.cats);
+    if (Array.isArray(d.cantine))  setCantine(d.cantine);
+    if (d.settings && typeof d.settings === 'object' && !Array.isArray(d.settings))
+      setSettings({ weeksToShow: 4, householdSize: 6, ...d.settings });
+  };
+
+  /** Import : met d'abord les données actuelles de côté (récupérables plus tard), puis remplace. */
   const importAllData = (data) => {
-    if (data.recipes)  setRecipes(data.recipes);
-    if (data.meals)    setMeals(data.meals);
-    if (data.shopping) setShopping(data.shopping);
-    if (data.cats)     setCats(data.cats);
-    if (data.settings) setSettings(data.settings);
-    if (data.cantine)  setCantine(data.cantine);
+    const prev = { recipes, meals, shopping, cats, settings, cantine };
+    const entry = { date: ts(), data: prev };
+    _mem[PRE_IMPORT_KEY] = entry;
+    if (_ls) { try { _ls.setItem(PRE_IMPORT_KEY, JSON.stringify(entry)); } catch {} }
+    setPreImport({ date: entry.date });
+    applyBackup(data);
+    showSnack('✅ Données restaurées', () => applyBackup(prev));
+  };
+
+  /** Revient à l'état d'avant le dernier import. */
+  const restorePreImport = () => {
+    const v = loadFromStorage(PRE_IMPORT_KEY, null);
+    if (!v || !v.data) { showSnack('ℹ️ Aucune copie d\u2019avant import'); setPreImport(null); return; }
+    applyBackup(v.data);
+    delete _mem[PRE_IMPORT_KEY];
+    if (_ls) { try { _ls.removeItem(PRE_IMPORT_KEY); } catch {} }
+    setPreImport(null);
+    showSnack('↩ Import annulé · tes données d\u2019avant sont revenues');
   };
 
   return (
@@ -796,7 +877,7 @@ function AppProvider({ children }) {
       addRecipe, updateRecipe, duplicateRecipe, deleteRecipe,
       addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek, reportMeals,
       addShoppingItem, deleteShoppingItem, deleteShoppingItemsByIds, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
-      reorderItemsInCat, addCat, deleteCat, updateCat, addKeywordToCat, reorderCats, updSettings, importAllData,
+      reorderItemsInCat, addCat, deleteCat, updateCat, addKeywordToCat, reorderCats, updSettings, importAllData, preImport, restorePreImport,
       upsertCantineDay, upsertCantineDays, deleteCantineDay, clearCantine,
       planningTarget, setPlanningTarget,
     }}>
@@ -2226,8 +2307,6 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
   const [elapsed,    setElapsed]    = useState(0);
   const [error,      setError]      = useState('');
   const [result,     setResult]     = useState(null); // { count, first, last }
-  const [rawDump,    setRawDump]    = useState(null); // texte brut OCR, pour diagnostic
-  const [rawOpen,    setRawOpen]    = useState(false);
 
   useEffect(() => {
     if (!importing) { setElapsed(0); return; }
@@ -2276,15 +2355,13 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
   const handleFile = async (file) => {
     if (!file) return;
     abortRef.current = new AbortController();
-    setImporting(true); setError(''); setResult(null); setRawDump(null); setRawOpen(false);
+    setImporting(true); setError(''); setResult(null);
     setImportStep('📷 Lecture de la photo…');
     try {
       const base64 = await withTimeout(readFileAsBase64(file));
       setImportStep('🔎 Reconnaissance de texte (local, hors-ligne)…');
 
       const data = await withTimeout(analyzeCantinePhotoNative(base64), 20000);
-      if (data.raw) setRawDump(data.raw); // conservé que l'import réussisse ou non
-
       if (data.error) throw new Error(data.error);
 
       const days = (data.days || []).filter(d => d && isValidISODate(d.date));
@@ -2309,14 +2386,6 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
     }
   };
 
-  const copyRawDump = () => {
-    if (!rawDump?.length) return;
-    const text = rawDump.map(l => `[top=${l.top} left=${l.left}] ${l.text}`).join('\n');
-    navigator.clipboard?.writeText(text).then(
-      () => showSnack('📋 Texte brut copié'),
-      () => showSnack('❌ Copie impossible sur cet appareil — fais une capture d\u2019écran du bloc ci-dessous à la place')
-    );
-  };
 
   const fmt = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
 
@@ -2343,7 +2412,6 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
             }} variant="primary" style={{ width:'100%', justifyContent:'center' }}>
               📷 {error ? 'Réessayer avec une autre photo' : 'Choisir une photo'}
             </Btn>
-            <RawDumpDebug rawDump={rawDump} rawOpen={rawOpen} setRawOpen={setRawOpen} onCopy={copyRawDump} />
           </>
         )}
 
@@ -2370,46 +2438,10 @@ function CantinePhotoImportModal({ onClose, upsertCantineDays }) {
               Du {fmt(result.first)} au {fmt(result.last)} · vérifie la liste ci-dessous et corrige si besoin (tap sur un jour).
             </div>
             <Btn onClick={onClose} variant="primary" style={{ width:'100%', justifyContent:'center' }}>Fermer</Btn>
-            <RawDumpDebug rawDump={rawDump} rawOpen={rawOpen} setRawOpen={setRawOpen} onCopy={copyRawDump} />
           </div>
         )}
       </div>
     </BottomSheet>
-  );
-}
-
-/**
- * Bloc dépliable affichant le texte brut OCR tel quel (texte + position), pour
- * diagnostiquer un résultat inattendu sans deviner. Visible aussi bien quand
- * l'import échoue que quand il réussit mais produit un résultat suspect.
- */
-function RawDumpDebug({ rawDump, rawOpen, setRawOpen, onCopy }) {
-  if (!rawDump?.length) return null;
-  return (
-    <div style={{ marginTop:14 }}>
-      <button onClick={() => setRawOpen(v => !v)} style={{
-        width:'100%', textAlign:'left', background:'none', border:'none',
-        color:C.muted, fontSize:11, cursor:'pointer', padding:0, fontFamily:'inherit',
-      }}>
-        {rawOpen ? '▲' : '▼'} 🪲 Texte brut détecté ({rawDump.length} lignes) — diagnostic
-      </button>
-      {rawOpen && (
-        <div style={{ marginTop:8 }}>
-          <div style={{
-            maxHeight:220, overflowY:'auto', background:C.bg, border:`1px solid ${C.border}`,
-            borderRadius:9, padding:10, fontFamily:'monospace', fontSize:11, color:C.soft, lineHeight:1.6,
-          }}>
-            {rawDump.map((l, i) => (
-              <div key={i}>[{l.top}] {l.text}</div>
-            ))}
-          </div>
-          <button onClick={onCopy} style={{
-            marginTop:6, width:'100%', padding:'7px', background:C.border, border:'none',
-            color:C.soft, borderRadius:8, fontSize:11, cursor:'pointer', fontFamily:'inherit',
-          }}>📋 Copier (pour me l'envoyer)</button>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -3044,7 +3076,7 @@ function AddToListModal({ recipe, defaultPersons, onClose }) {
 
 function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
   useBackHandler(onClose);
-  const { meals, shopping, cats, showSnack, updateRecipe, duplicateRecipe, addIngredientsFromRecipe, deleteShoppingItemsByIds, settings } = useApp();
+  const { meals, shopping, cats, showSnack, updateRecipe, duplicateRecipe, addIngredientsFromRecipe, deleteShoppingItemsByIds } = useApp();
   const [checked,      setChecked]      = useState(new Set());
   const [viewPortions, setViewPortions] = useState(recipe.portions || 4);
   const [assignOpen,   setAssignOpen]   = useState(false);
@@ -3635,7 +3667,6 @@ function WeeksBadge({ recipeId }) {
   const top  = weeks[0];
   const rest = weeks.length - 1;
   const isCurrent  = top === currentWeek;
-  const isFuture   = top > currentWeek;
   const weekStart  = getWeekStart(top);
   const shortLabel = isCurrent
     ? 'Cette semaine'
@@ -5932,46 +5963,51 @@ function SettingsCantineSection() {
 }
 
 function SettingsBackupSection() {
-  const { recipes, meals, shopping, cats, settings, cantine, importAllData, showSnack } = useApp();
+  const { recipes, meals, shopping, cats, settings, cantine, importAllData, preImport, restorePreImport, showSnack } = useApp();
   const [importErr, setImportErr] = useState('');
+  const [pending,   setPending]   = useState(null); // { data, info } en attente de confirmation
+  const [busy,      setBusy]      = useState(false);
   const fileRef = useRef(null);
 
-  const handleExport = () => {
-    try {
-      const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings, cantine };
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = `meal-plan-${new Date().toISOString().slice(0,10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showSnack('✅ Sauvegarde exportée');
-    } catch(e) {
-      showSnack(`❌ Export impossible · ${e.message}`);
-    }
+  const handleExport = async () => {
+    if (busy) return;
+    setBusy(true);
+    const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings, cantine };
+    const res = await saveTextFile(`meal-plan-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data, null, 2));
+    setBusy(false);
+    if (res.ok)             showSnack('✅ Sauvegarde enregistrée');
+    else if (res.cancelled) showSnack('Export annulé');
+    else                    showSnack(`❌ Export impossible · ${res.error || 'erreur inconnue'}`);
   };
 
   const handleImportFile = (e) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
+    setImportErr('');
     const reader = new FileReader();
     reader.onload = (ev) => {
-      try {
-        const data = JSON.parse(ev.target.result);
-        if (!data.recipes && !data.cats) throw new Error('format invalide');
-        importAllData(data);
-        showSnack('✅ Données restaurées avec succès');
-        setImportErr('');
-      } catch(e) {
-        setImportErr('Fichier JSON invalide ou corrompu.');
-        showSnack(`❌ Restauration impossible · ${e.message}`);
-      }
+      let data;
+      try { data = JSON.parse(ev.target.result); }
+      catch { setImportErr('Ce fichier n\u2019est pas un JSON valide.'); return; }
+      const info = validateBackup(data);
+      if (info.error) { setImportErr(info.error); return; }
+      setPending({ data, info });
     };
-    reader.onerror = () => showSnack('❌ Impossible de lire le fichier');
+    reader.onerror = () => setImportErr('Impossible de lire le fichier.');
     reader.readAsText(file);
-    e.target.value = '';
   };
+
+  const confirmImport = () => {
+    const { data } = pending;
+    setPending(null);
+    importAllData(data);
+  };
+
+  const fmtDate = (v) => { try { return new Date(v).toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' }); } catch { return ''; } };
+  const fmtDateTime = (v) => { try { return new Date(v).toLocaleString('fr-FR', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }); } catch { return ''; } };
+  const current = { recipes: recipes.length, meals: meals.length, shopping: shopping.length, cats: cats.length, cantine: cantine.length };
+  const LABELS = { recipes:'Recettes', meals:'Repas planifiés', shopping:'Articles de courses', cats:'Catégories', cantine:'Menus cantine' };
 
   return (
     <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16 }}>
@@ -5979,7 +6015,7 @@ function SettingsBackupSection() {
         Exportez toutes vos données (recettes, planning, courses, catégories) dans un fichier JSON. Vous pourrez les restaurer à tout moment.
       </div>
       <div style={{ display:'flex', gap:8 }}>
-        <Btn onClick={handleExport} variant="primary" style={{ flex:1, justifyContent:'center' }}>
+        <Btn onClick={handleExport} variant="primary" disabled={busy} style={{ flex:1, justifyContent:'center' }}>
           📤 Exporter
         </Btn>
         <Btn onClick={() => fileRef.current?.click()} variant="default" style={{ flex:1, justifyContent:'center' }}>
@@ -5988,16 +6024,59 @@ function SettingsBackupSection() {
         <input ref={fileRef} type="file" accept=".json,application/json" onChange={handleImportFile} style={{ display:'none' }} />
       </div>
       {importErr && (
-        <div style={{ marginTop:10, color:C.red, fontSize:12 }}>⚠️ {importErr}</div>
+        <div style={{ marginTop:10, color:C.red, fontSize:12, lineHeight:1.5 }}>⚠️ {importErr}</div>
+      )}
+      {preImport && (
+        <div style={{
+          marginTop:12, padding:'10px 12px', background:C.orangeBg, border:`1px solid ${C.orange}44`,
+          borderRadius:10, display:'flex', alignItems:'center', gap:10,
+        }}>
+          <div style={{ flex:1, fontSize:12, color:C.soft, lineHeight:1.5 }}>
+            Tes données d'avant le dernier import ({fmtDateTime(preImport.date)}) sont gardées de côté.
+          </div>
+          <Btn onClick={restorePreImport} variant="orange" small>↩ Annuler l'import</Btn>
+        </div>
       )}
       <div style={{ marginTop:12, fontSize:11, color:C.muted, lineHeight:1.6 }}>
         {recipes.length} recette{recipes.length!==1?'s':''} · {meals.length} repas · {shopping.length} article{shopping.length!==1?'s':''} · {cats.length} catégorie{cats.length!==1?'s':''}
       </div>
+
+      {pending && (
+        <BottomSheet title="Remplacer tes données ?" onClose={() => setPending(null)}>
+          <div style={{ padding:'14px 18px 18px' }}>
+            <div style={{ fontSize:13, color:C.soft, lineHeight:1.6, marginBottom:12 }}>
+              Sauvegarde{pending.info.exportDate ? ` du ${fmtDate(pending.info.exportDate)}` : ''}{pending.info.version ? ` (v${pending.info.version})` : ''}.
+              Elle va <b style={{ color:C.text }}>remplacer</b> ce que contient l'appli aujourd'hui :
+            </div>
+            <div style={{ border:`1px solid ${C.border}`, borderRadius:10, overflow:'hidden', marginBottom:12 }}>
+              <div style={{ display:'flex', padding:'7px 12px', fontSize:11, color:C.muted, background:C.bg }}>
+                <span style={{ flex:1 }} /><span style={{ width:70, textAlign:'right' }}>Fichier</span><span style={{ width:70, textAlign:'right' }}>Actuel</span>
+              </div>
+              {Object.keys(pending.info.counts).map(k => (
+                <div key={k} style={{ display:'flex', padding:'8px 12px', fontSize:13, borderTop:`1px solid ${C.border}` }}>
+                  <span style={{ flex:1, color:C.soft }}>{LABELS[k]}</span>
+                  <span style={{ width:70, textAlign:'right', color:C.text, fontWeight:600 }}>{pending.info.counts[k]}</span>
+                  <span style={{ width:70, textAlign:'right', color:C.muted }}>{current[k]}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize:12, color:C.muted, lineHeight:1.6, marginBottom:16 }}>
+              Les rubriques absentes du fichier ne sont pas touchées. Tes données actuelles sont mises de côté automatiquement :
+              tu pourras annuler juste après, ou plus tard depuis cet écran.
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <Btn onClick={() => setPending(null)} style={{ flex:1, justifyContent:'center' }}>Annuler</Btn>
+              <Btn onClick={confirmImport} variant="danger" style={{ flex:1, justifyContent:'center' }}>Remplacer</Btn>
+            </div>
+          </div>
+        </BottomSheet>
+      )}
     </div>
   );
 }
 
 const CHANGELOG = [
+  ['3.7.1', 'Sécurité : écran de secours en cas de plantage · import vérifié, confirmé et annulable · export par la fenêtre « Enregistrer sous » · Annuler sur duplication de semaine et menu cantine · nettoyage du diagnostic OCR'],
   ['3.7.0', 'Catégories : liste glisser-déposer avec compteurs, test d\'un article, éditeur à pastilles, suppression annulable'],
   ['3.6.0', 'Thèmes : Classique (inchangé) et Minuit (nouveau) au choix dans Options > Apparence'],
   ['3.5.4', 'Fix plantage note sur repas libre · noms de repas sur 2 lignes · nettoyage code mort et couleurs · journal complété'],
@@ -6376,13 +6455,90 @@ function GlobalStyle() {
   );
 }
 
+// ══════════════════════════════════════════════════════
+//  ÉCRAN DE SECOURS — évite l'écran blanc si un composant plante
+// ══════════════════════════════════════════════════════
+function CrashScreen({ error, onRetry }) {
+  const [msg, setMsg] = useState('');
+  const hasPre = !!loadFromStorage(PRE_IMPORT_KEY, null)?.data;
+  const col = (k, d) => (C && C[k]) || d;
+
+  const rescueExport = async () => {
+    const data = { version: VERSION, exportDate: new Date().toISOString() };
+    BACKUP_KEYS.forEach(k => { const v = loadFromStorage('mp_' + k, undefined); if (v !== undefined) data[k] = v; });
+    const res = await saveTextFile(`meal-plan-secours-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data, null, 2));
+    setMsg(res.ok ? '✅ Données enregistrées' : res.cancelled ? 'Export annulé' : `❌ ${res.error || 'échec'}`);
+  };
+  const rollbackImport = () => {
+    const v = loadFromStorage(PRE_IMPORT_KEY, null);
+    if (!v?.data) return;
+    BACKUP_KEYS.forEach(k => {
+      if (v.data[k] === undefined) return;
+      _mem['mp_' + k] = v.data[k];
+      if (_ls) { try { _ls.setItem('mp_' + k, JSON.stringify(v.data[k])); } catch {} }
+    });
+    delete _mem[PRE_IMPORT_KEY];
+    if (_ls) { try { _ls.removeItem(PRE_IMPORT_KEY); } catch {} }
+    window.location.reload();
+  };
+  const bStyle = (primary) => ({
+    width:'100%', padding:'12px 16px', borderRadius:12, fontSize:15, fontWeight:600, cursor:'pointer',
+    border: primary ? 'none' : `1px solid ${col('border','#2C3A52')}`, fontFamily:'inherit',
+    background: primary ? col('accentDk','#2563EB') : col('card','#18202E'),
+    color: primary ? col('onAccent','#fff') : col('text','#E8EEF7'),
+  });
+
+  return (
+    <div style={{
+      minHeight:'100vh', background:col('bg','#0F1621'), color:col('text','#E8EEF7'),
+      display:'flex', alignItems:'center', justifyContent:'center', padding:24, fontFamily:'system-ui, sans-serif',
+    }}>
+      <div style={{ width:'100%', maxWidth:380 }}>
+        <div style={{ fontSize:44, marginBottom:8 }}>😵</div>
+        <div style={{ fontSize:20, fontWeight:700, marginBottom:8 }}>Oups, l'appli a rencontré un problème</div>
+        <div style={{ fontSize:14, color:col('muted','#8A99B3'), lineHeight:1.6, marginBottom:18 }}>
+          Tes données sont normalement toujours sur ton téléphone.
+          Essaie de réafficher l'appli ; si ça plante encore, sauvegarde d'abord tes données.
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          <button onClick={onRetry} style={bStyle(true)}>🔄 Réessayer</button>
+          <button onClick={() => window.location.reload()} style={bStyle(false)}>↻ Recharger l'appli</button>
+          <button onClick={rescueExport} style={bStyle(false)}>💾 Sauvegarder mes données</button>
+          {hasPre && <button onClick={rollbackImport} style={bStyle(false)}>↩ Revenir à avant le dernier import</button>}
+        </div>
+        {msg && <div style={{ marginTop:12, fontSize:13, color:col('soft','#B8C4D8') }}>{msg}</div>}
+        <div style={{
+          marginTop:18, padding:10, borderRadius:10, background:col('card','#18202E'),
+          fontFamily:'monospace', fontSize:11, color:col('muted','#8A99B3'), wordBreak:'break-word', lineHeight:1.5,
+        }}>
+          v{VERSION} · {String(error?.message || error).slice(0, 240)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    try { console.error('[MealPlan] plantage', error, info && info.componentStack); } catch {}
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <CrashScreen error={this.state.error} onRetry={() => this.setState({ error: null })} />;
+  }
+}
+
 export default function MealPlanApp() {
   return (
-    <AppProvider>
-      <>
-        <GlobalStyle />
-        <AppShell />
-      </>
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <>
+          <GlobalStyle />
+          <AppShell />
+        </>
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

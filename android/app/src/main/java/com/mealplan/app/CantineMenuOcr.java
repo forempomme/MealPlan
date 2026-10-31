@@ -190,7 +190,6 @@ public class CantineMenuOcr {
         if (headers.isEmpty()) {
             JSONObject err = new JSONObject();
             err.put("error", "Aucun jour détecté (en-têtes LUNDI/MARDI/… introuvables sur cette photo).");
-            err.put("raw", buildRawDump(lines));
             return err.toString();
         }
 
@@ -306,7 +305,6 @@ public class CantineMenuOcr {
 
         JSONObject out = new JSONObject();
         out.put("days", days);
-        out.put("raw", buildRawDump(lines)); // texte brut détecté, pour diagnostic
         return out.toString();
     }
 
@@ -420,27 +418,6 @@ public class CantineMenuOcr {
                 }
             }
         }
-    }
-
-    /**
-     * Dump de toutes les lignes OCR brutes (texte + position), triées comme sur la
-     * photo (haut→bas, gauche→droite). Permet de voir EXACTEMENT ce que l'OCR a lu,
-     * indépendamment de l'heuristique de reconstruction de grille ci-dessus — utile
-     * pour diagnostiquer un problème d'extraction sans deviner à l'aveugle.
-     */
-    private static JSONArray buildRawDump(List<OcrLine> lines) throws JSONException {
-        List<OcrLine> sorted = new ArrayList<>(lines);
-        sorted.sort(Comparator.<OcrLine>comparingInt(l -> l.rect.top / 20).thenComparingInt(l -> l.rect.left));
-        JSONArray raw = new JSONArray();
-        for (OcrLine l : sorted) {
-            JSONObject o = new JSONObject();
-            o.put("text", l.text);
-            o.put("top", l.rect.top);
-            o.put("left", l.rect.left);
-            o.put("bottom", l.rect.bottom);
-            raw.put(o);
-        }
-        return raw;
     }
 
     private static int minTop(List<DayHeader> row) {

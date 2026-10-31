@@ -19,6 +19,10 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
@@ -41,6 +45,39 @@ public class MainActivity extends AppCompatActivity {
             }
             filePathCallback.onReceiveValue(uris); // null = annulé, WebView gère ce cas proprement
             filePathCallback = null;
+        }
+    );
+
+    // Export de sauvegarde : contenu et callback JS en attente pendant que l'utilisateur choisit
+    // où enregistrer le fichier (fenêtre système « Enregistrer sous », aucune permission requise).
+    private String pendingSaveContent;
+    private String pendingSaveCbId;
+
+    private final ActivityResultLauncher<Intent> saveFileLauncher = registerForActivityResult(
+        new ActivityResultContracts.StartActivityForResult(),
+        result -> {
+            final String content = pendingSaveContent;
+            final String cbId = pendingSaveCbId;
+            pendingSaveContent = null;
+            pendingSaveCbId = null;
+            if (cbId == null) return;
+            if (result.getResultCode() != RESULT_OK
+                    || result.getData() == null
+                    || result.getData().getData() == null) {
+                deliverSaveResult(cbId, "{\"cancelled\":true}");
+                return;
+            }
+            final Uri uri = result.getData().getData();
+            new Thread(() -> {
+                try (OutputStream os = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (os == null) throw new IOException("fichier inaccessible");
+                    os.write(content.getBytes(StandardCharsets.UTF_8));
+                    os.flush();
+                    deliverSaveResult(cbId, "{\"ok\":true}");
+                } catch (Exception e) {
+                    deliverSaveResult(cbId, "{\"error\":\"" + jsonSafe(e.getMessage()) + "\"}");
+                }
+            }).start();
         }
     );
 
@@ -158,6 +195,29 @@ public class MainActivity extends AppCompatActivity {
             }).start();
         }
 
+        /**
+         * Enregistre un fichier texte (sauvegarde JSON) : ouvre la fenêtre système
+         * « Enregistrer sous » ; le résultat revient à window.__mpSave[cbId].
+         */
+        @JavascriptInterface
+        public void saveFile(final String filename, final String content, final String cbId) {
+            runOnUiThread(() -> {
+                try {
+                    pendingSaveContent = content;
+                    pendingSaveCbId = cbId;
+                    Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    i.addCategory(Intent.CATEGORY_OPENABLE);
+                    i.setType("application/json");
+                    i.putExtra(Intent.EXTRA_TITLE, filename);
+                    saveFileLauncher.launch(i);
+                } catch (Exception e) {
+                    pendingSaveContent = null;
+                    pendingSaveCbId = null;
+                    deliverSaveResult(cbId, "{\"error\":\"" + jsonSafe(e.getMessage()) + "\"}");
+                }
+            });
+        }
+
         @JavascriptInterface
         public void share(String title, String text) {
             Intent i = new Intent(Intent.ACTION_SEND);
@@ -175,6 +235,24 @@ public class MainActivity extends AppCompatActivity {
 
     private void showToast(final String msg) {
         runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_LONG).show());
+    }
+
+    private static String jsonSafe(String m) {
+        if (m == null) return "Erreur inconnue";
+        return m.replace("\\", "/").replace("\"", "'").replace("\n", " ").replace("\r", " ");
+    }
+
+    /** Livre un résultat JSON au callback JS enregistré sous window.__mpSave[cbId]. */
+    private void deliverSaveResult(final String cbId, final String resultJson) {
+        final String safe = resultJson.replace("\\", "\\\\").replace("'", "\\'");
+        runOnUiThread(() ->
+            webView.evaluateJavascript(
+                "(function(){" +
+                "  var cb=window.__mpSave&&window.__mpSave['" + cbId + "'];" +
+                "  if(cb){try{cb(JSON.parse('" + safe + "'));}catch(e){cb({error:e.message});}" +
+                "  delete window.__mpSave['" + cbId + "'];}" +
+                "})()", null)
+        );
     }
 
     /** Livre un résultat JSON au callback JS enregistré sous window.__mpCantineOCR[cbId]. */
