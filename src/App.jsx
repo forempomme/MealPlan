@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.8.0"; // v76
+const VERSION = "3.9.0"; // v77
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -401,6 +401,156 @@ function mergeOrAdd(list, newItem) {
 }
 
 // ══════════════════════════════════════════════════════
+//  STOCK / GARDE-MANGER — outils purs (testés hors interface)
+// ══════════════════════════════════════════════════════
+const STOCK_ZONES = [
+  { id:'sec',    label:'Sec',         icon:'🌾', color:'#E0A24F' },
+  { id:'frigo',  label:'Frigo',       icon:'❄️', color:'#4FA3E0' },
+  { id:'congel', label:'Congélateur', icon:'🧊', color:'#9AA4FF' },
+  { id:'maison', label:'Maison',      icon:'🏠', color:'#5FCB9A' },
+];
+const stockZone = id => STOCK_ZONES.find(z => z.id === id) || STOCK_ZONES[0];
+const MAISON_GROUPS = [
+  { id:'Ménage',        icon:'🧽' },
+  { id:'Sanitaires',    icon:'🚽' },
+  { id:'Salle de bain', icon:'🛁' },
+  { id:'Chiens',        icon:'🐕' },
+];
+/** Même table que la fusion de courses + cuillères (approximation volume : 1 cs ≈ 15 ml, 1 cc ≈ 5 ml) */
+const STOCK_CONV = { ...UNIT_CONV, cs:{ factor:15, type:'volume' }, cc:{ factor:5, type:'volume' } };
+const PIECE_UNITS = new Set(['pc','pcs','piece','pieces','pièce','pièces','u','unité','unités','unite','unites']);
+
+/** Nom comparable : minuscules, sans accents, singulier (« Œufs » = « oeuf » = « oeufs ») */
+function stockNorm(name) {
+  return stemFrName(String(name || '').replace(/\u0153/gi, 'oe')).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+/** Quantité de recette → unité de base du stock (g, ml, ou unité brute ; '' = pièces) */
+function stockBase(qty, unit) {
+  const u = String(unit || '').trim().toLowerCase();
+  const c = STOCK_CONV[u];
+  if (c) return { qty: (qty || 0) * c.factor, unit: c.type === 'weight' ? 'g' : 'ml', factor: c.factor };
+  return { qty: qty || 0, unit: PIECE_UNITS.has(u) ? '' : u, factor: 1 };
+}
+
+const r1 = n => Math.round(n * 10) / 10;
+
+/** Affichage d'une quantité de stock selon son unité de base */
+function fmtStockQty(qty, unit) {
+  if (unit === 'q') return `${Math.round((qty || 0) * 25)} %`;
+  if (unit === 'g')  return qty >= 1000 ? `${r1(qty / 1000)} kg` : `${r1(qty)} g`;
+  if (unit === 'ml') return qty >= 1000 ? `${r1(qty / 1000)} L`  : `${r1(qty)} ml`;
+  return `${r1(qty || 0)}${unit ? ' ' + unit : ''}`;
+}
+
+/** Jours entre aujourd'hui et une date ISO (négatif = dépassée) ; null si pas de date */
+function daysUntil(iso) {
+  if (!iso || !isValidISODate(iso)) return null;
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.round((new Date(iso + 'T00:00:00') - t) / 86400000);
+}
+function addDaysISO(n) { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return fmtISODate(d); }
+function addMonthsISO(n) { const d = new Date(); d.setHours(12, 0, 0, 0); d.setMonth(d.getMonth() + n); return fmtISODate(d); }
+function fmtDlcLabel(iso) {
+  const n = daysUntil(iso);
+  if (n === null) return '';
+  if (n < 0)   return `périmé · ${-n} j`;
+  if (n === 0) return 'aujourd’hui';
+  if (n === 1) return 'demain';
+  if (n < 60)  return `${n} j`;
+  return `${Math.round(n / 30)} mois`;
+}
+
+/** Zone de stock proposée pour une catégorie de courses ('none' = ne pas suivre en stock) */
+function catStockZone(cat) {
+  if (!cat) return 'none';
+  if (cat.stockZone) return cat.stockZone;
+  if (/entretien|m[ée]nage|hygi|sanit|chien|animaux|bain/i.test(cat.name || '')) return 'maison';
+  const byId = { c1:'frigo', c3:'frigo', c4:'frigo', c5:'sec', c6:'sec', c8:'sec' };
+  return byId[cat.id] || 'none';
+}
+function catMaisonGroup(cat) {
+  const n = cat?.name || '';
+  if (/chien|animaux/i.test(n)) return 'Chiens';
+  if (/sanit|wc|toilet/i.test(n)) return 'Sanitaires';
+  if (/hygi|bain|douche/i.test(n)) return 'Salle de bain';
+  return 'Ménage';
+}
+
+/** Un article à racheter : seuil atteint (jamais pour « toujours là ») */
+const stockNeedsRestock = it => !it.always && it.min != null && (it.qty || 0) <= it.min;
+
+/**
+ * Fusionne `entry` dans la liste de stock : même nom + même zone + même unité de base → on additionne.
+ * Retourne la nouvelle liste.
+ */
+function stockMergeAdd(list, entry) {
+  const n = stockNorm(entry.name);
+  const ex = list.find(s => s.zone === entry.zone && stockNorm(s.name) === n && (s.unit || '') === (entry.unit || '')
+    && (entry.zone !== 'maison' || (s.grp || '') === (entry.grp || '')));
+  if (!ex) return [...list, entry];
+  const dlcs = [ex.dlc, entry.dlc].filter(Boolean).sort();
+  return list.map(s => s.id !== ex.id ? s : {
+    ...s,
+    qty: entry.zone === 'maison' ? 4 : r1((s.qty || 0) + (entry.qty || 0)),
+    cap: entry.zone === 'maison' ? 4 : Math.max(s.cap || 0, r1((s.qty || 0) + (entry.qty || 0))),
+    dlc: dlcs[0] || null,                       // on garde la date la plus proche
+    buy: entry.buy || s.buy || null,
+  });
+}
+
+/**
+ * Plan de prélèvement dans le stock pour une liste d'ingrédients (dans l'ordre).
+ * lines : [{key, name, qty, unit}] · skip : Set de clés ignorées (case décochée)
+ * Retourne { [key]: { item, status, use, avail, remain } }
+ *   status : 'always' (toujours là) | 'full' (couvert) | 'partial' | 'incompat' (unité différente)
+ *   use    : quantité prise, en unité de base du stock · remain : reste à acheter, en unité de la recette
+ */
+function planStockUse(lines, stock, skip = new Set()) {
+  const left = {};
+  stock.forEach(s => { left[s.id] = s.qty || 0; });
+  const out = {};
+  lines.forEach(l => {
+    if (skip.has(l.key)) return;
+    const n = stockNorm(l.name);
+    const cands = stock.filter(s => s.zone !== 'maison' && stockNorm(s.name) === n);
+    if (!cands.length) return;
+    const always = cands.find(s => s.always);
+    if (always) { out[l.key] = { item: always, status:'always', use:0, avail:0, remain:0 }; return; }
+    const b = stockBase(l.qty, l.unit);
+    const compat = cands.filter(s => (s.unit || '') === b.unit && left[s.id] > 0)
+      .sort((x, y) => (x.dlc || '9999').localeCompare(y.dlc || '9999') || left[y.id] - left[x.id]);
+    if (!compat.length) {
+      const sameUnit = cands.some(s => (s.unit || '') === b.unit);
+      if (!sameUnit) out[l.key] = { item: cands[0], status:'incompat', use:0, avail: cands[0].qty || 0, remain: l.qty };
+      return; // même unité mais stock à 0 : rien à proposer
+    }
+    const item = compat[0];
+    if (b.qty <= 0) { out[l.key] = { item, status:'full', use:0, avail:left[item.id], remain:0 }; return; } // « sel » sans quantité
+    const avail = left[item.id];
+    const use = Math.min(avail, b.qty);
+    left[item.id] -= use;
+    const remain = r1(Math.max(0, (b.qty - use) / b.factor));
+    out[l.key] = { item, status: remain <= 0 ? 'full' : 'partial', use: r1(use), avail, remain };
+  });
+  return out;
+}
+
+/** Construit un article de stock complet à partir d'une saisie partielle. */
+function makeStockItem(e) {
+  const maison = e.zone === 'maison';
+  return {
+    id: genId(), name: String(e.name || '').trim(), zone: e.zone || 'sec',
+    grp: maison ? (e.grp || 'Ménage') : null,
+    qty: e.always ? 0 : (maison ? Math.max(0, Math.min(4, e.qty ?? 4)) : Math.max(0, e.qty ?? 0)),
+    unit: maison ? 'q' : (e.unit || ''),
+    always: !!e.always, min: e.min ?? null, dlc: e.dlc || null,
+    buy: e.buy || null, catId: e.catId || null, addedAt: ts(),
+    cap: maison ? 4 : (e.always ? 0 : Math.max(0, e.qty ?? 0)),
+  };
+}
+
+// ══════════════════════════════════════════════════════
 //  DONNÉES INITIALES (démo)
 // ══════════════════════════════════════════════════════
 
@@ -440,7 +590,7 @@ function canonTags(list, known) {
 
 // ── Sauvegarde / restauration : outils partagés (écran Options ET écran de secours) ──
 const PRE_IMPORT_KEY = 'mp_pre_import'; // copie des données d'avant le dernier import
-const BACKUP_KEYS = ['recipes', 'meals', 'shopping', 'cats', 'settings', 'cantine'];
+const BACKUP_KEYS = ['recipes', 'meals', 'shopping', 'cats', 'settings', 'cantine', 'stock'];
 
 /**
  * Enregistre un fichier texte. Sur Android : fenêtre « Enregistrer sous » du système
@@ -472,7 +622,7 @@ function saveTextFile(filename, text) {
 function validateBackup(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data))
     return { error: 'Ce fichier n\u2019est pas une sauvegarde Meal Plan.' };
-  const need = { recipes: ['id','name'], meals: ['id','weekKey'], shopping: ['id','name'], cats: ['id','name'], cantine: ['date'] };
+  const need = { recipes: ['id','name'], meals: ['id','weekKey'], shopping: ['id','name'], cats: ['id','name'], cantine: ['date'], stock: ['id','name'] };
   const counts = {};
   for (const k of Object.keys(need)) {
     if (data[k] === undefined) continue;
@@ -502,6 +652,7 @@ function AppProvider({ children }) {
   const [cats,     setCats]     = useState(() => loadFromStorage('mp_cats',      DEFAULT_CATS));
   const [settings, setSettings] = useState(() => loadFromStorage('mp_settings',  { weeksToShow: 4, householdSize: 6 }));
   const [cantine,  setCantine]  = useState(() => loadFromStorage('mp_cantine',   []));
+  const [stock,    setStock]    = useState(() => loadFromStorage('mp_stock',     []));
   // Thème appliqué AVANT le rendu des enfants (C est lu pendant leur rendu)
   applyTheme(settings.theme);
   const [planningTarget, setPlanningTarget] = useState(null); // weekKey cible pour navigation
@@ -542,6 +693,7 @@ function AppProvider({ children }) {
   useEffect(() => saveWithCheck('mp_cats',     cats),     [cats,     saveWithCheck]);
   useEffect(() => saveWithCheck('mp_settings', settings), [settings, saveWithCheck]);
   useEffect(() => saveWithCheck('mp_cantine',  cantine),  [cantine,  saveWithCheck]);
+  useEffect(() => saveWithCheck('mp_stock',    stock),    [stock,    saveWithCheck]);
 
   /* ── Recettes ── */
   const addRecipe    = d => { setRecipes(p => [{ ...d, id: genId(), createdAt: ts() }, ...p]); showSnack('✅ Recette créée'); };
@@ -560,6 +712,8 @@ function AppProvider({ children }) {
     const removedShop   = shopping.filter(s =>
       s.fromRecipeId === id || removedMeals.some(m => m.id === s.fromMealId)
     );
+    const stockBack = removedMeals.flatMap(m => m.stockUsed || []);
+    if (stockBack.length) restoreStock(stockBack);
     setRecipes(p  => p.filter(r => r.id !== id));
     setMeals(p    => p.filter(m => m.recipeId !== id));
     setShopping(p => p.filter(s =>
@@ -574,24 +728,89 @@ function AppProvider({ children }) {
         setRecipes(p  => [...p, recipe]);
         setMeals(p    => [...p, ...removedMeals]);
         if (removedShop.length) setShopping(p => [...p, ...removedShop]);
+        if (stockBack.length) deductStock(stockBack);
       }
     );
   };
 
+  /* ── Stock (déclaré avant les repas : les repas y puisent / y rendent) ── */
+  const deductStock = used => setStock(p => p.map(s => {
+    const q = used.filter(u => u.stockId === s.id).reduce((a, u) => a + u.qty, 0);
+    return q ? { ...s, qty: Math.max(0, r1((s.qty || 0) - q)) } : s;
+  }));
+  const restoreStock = used => setStock(p => {
+    let list = p;
+    used.forEach(u => {
+      list = list.some(s => s.id === u.stockId)
+        ? list.map(s => s.id === u.stockId ? { ...s, qty: r1((s.qty || 0) + u.qty) } : s)
+        : [...list, { ...makeStockItem({ name:u.name, zone:u.zone, unit:u.unit, qty:u.qty }), id: u.stockId }];
+    });
+    return list;
+  });
+  const addStockItem = (entry, silent = false) => {
+    const item = makeStockItem(entry);
+    if (!item.name) return null;
+    setStock(p => stockMergeAdd(p, item));
+    if (!silent) showSnack(`🥫 « ${item.name} » ajouté au stock`);
+    return item.id;
+  };
+  const updateStockItem = (id, patch) => setStock(p => p.map(s => s.id === id ? { ...s, ...patch } : s));
+  const deleteStockItem = id => {
+    const it = stock.find(s => s.id === id);
+    if (!it) return;
+    setStock(p => p.filter(s => s.id !== id));
+    showSnack(`« ${it.name} » retiré du stock`, () => setStock(p => p.some(s => s.id === id) ? p : [...p, it]));
+  };
+  /** Ajout groupé (fin de courses) : annulation = retour à l'état d'avant. */
+  const addStockBatch = (entries) => {
+    if (!entries.length) return;
+    const prev = stock;
+    setStock(p => entries.reduce((list, e) => stockMergeAdd(list, makeStockItem(e)), p));
+    showSnack(`🥫 ${entries.length} article${entries.length>1?'s':''} ajouté${entries.length>1?'s':''} au stock`, () => setStock(prev));
+  };
+  /** Fin de courses : range dans le stock ET retire de la liste, en une seule annulation. */
+  const stockFromShopping = (entries, clearIds) => {
+    const prevStock = stock;
+    const removed = shopping.filter(s => clearIds.includes(s.id));
+    if (entries.length) setStock(p => entries.reduce((l, e) => stockMergeAdd(l, makeStockItem(e)), p));
+    if (removed.length) setShopping(p => p.filter(s => !clearIds.includes(s.id)));
+    const a = entries.length, b = removed.length;
+    showSnack(
+      `${a ? `🥫 ${a} article${a>1?'s':''} rangé${a>1?'s':''} au stock` : ''}${a && b ? ' · ' : ''}${b ? `${b} retiré${b>1?'s':''} de la liste` : ''}`,
+      () => { setStock(prevStock); if (removed.length) setShopping(p => [...p, ...removed]); }
+    );
+  };
+  /** Réachat : met les articles sous leur seuil dans la liste de courses. */
+  const restockItems = (items) => {
+    if (!items.length) return;
+    const prev = shopping;
+    const news = items.map(it => ({
+      id: genId(), name: it.name, qty: it.buy?.qty || 0, unit: it.buy?.unit || '',
+      categoryId: cats.some(c => c.id === it.catId) ? it.catId : categorize(it.name, cats),
+      fromRecipeId: null, checked: false, sortOrder: ts() + Math.random(), addedAt: ts(),
+    }));
+    setShopping(p => news.reduce((l, i) => mergeOrAdd(l, i), p));
+    showSnack(`🛒 ${news.length} article${news.length>1?'s':''} ajouté${news.length>1?'s':''} aux courses`, () => setShopping(prev));
+  };
+
   /* ── Repas ── */
-  const addMeal = (weekKey, recipeId, persons, customName = '') => {
+  const addMeal = (weekKey, recipeId, persons, customName = '', stockUsed = null) => {
     const id = genId();
-    setMeals(p => [...p, { id, weekKey, recipeId: recipeId || null, customName: customName || '', persons, done: false, note: '', addedAt: ts() }]);
+    const used = (stockUsed || []).filter(u => u.qty > 0);
+    setMeals(p => [...p, { id, weekKey, recipeId: recipeId || null, customName: customName || '', persons, done: false, note: '', addedAt: ts(),
+      ...(used.length ? { stockUsed: used } : {}) }]);
+    if (used.length) deductStock(used);
     return id;
   };
 
-  const addIngredientsFromRecipe = (recipe, persons, selectedIngIds, catOverrides = {}, mealId = null) => {
+  const addIngredientsFromRecipe = (recipe, persons, selectedIngIds, catOverrides = {}, mealId = null, qtyOverrides = {}) => {
     const scale = persons / (recipe.portions || 4);
     const items = (recipe.ingredients || [])
       .filter(ing => selectedIngIds.includes(ing.id))
+      .filter(ing => !(ing.id in qtyOverrides) || qtyOverrides[ing.id] > 0) // couvert par le stock → rien à acheter
       .map(ing => ({
         id: genId(), name: ing.name,
-        qty:  ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0,
+        qty:  ing.id in qtyOverrides ? qtyOverrides[ing.id] : (ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0),
         unit: ing.unit || '',
         categoryId:  catOverrides[ing.id] ?? categorize(ing.name, cats),
         fromRecipeId: recipe.id,  // affiché dans badge 📅 + compat données existantes
@@ -635,7 +854,24 @@ function AppProvider({ children }) {
     const oldPersons = meal.persons;
     const newPersons = Math.max(1, oldPersons + delta);
     if (newPersons === oldPersons) return;
-    setMeals(p => p.map(m => m.id === id ? { ...m, persons: newPersons } : m));
+    // Stock prélevé : proportionnel au nombre de personnes (plafonné à ce qui reste)
+    let nextUsed = null;
+    if (meal.stockUsed?.length) {
+      const left = {}; stock.forEach(s => { left[s.id] = s.qty || 0; });
+      const ratioS = newPersons / oldPersons;
+      const give = [], take = [];
+      nextUsed = meal.stockUsed.map(u => {
+        const want = r1(u.qty * ratioS);
+        let q = want;
+        if (want > u.qty) { q = r1(u.qty + Math.min(want - u.qty, left[u.stockId] || 0)); left[u.stockId] = (left[u.stockId] || 0) - (q - u.qty); }
+        if (q > u.qty) take.push({ ...u, qty: r1(q - u.qty) });
+        if (q < u.qty) give.push({ ...u, qty: r1(u.qty - q) });
+        return { ...u, qty: q };
+      });
+      if (take.length) deductStock(take);
+      if (give.length) restoreStock(give);
+    }
+    setMeals(p => p.map(m => m.id === id ? { ...m, persons: newPersons, ...(nextUsed ? { stockUsed: nextUsed } : {}) } : m));
     // Repas personnalisés (recipeId=null) n'ont pas d'articles de courses liés
     if (!meal.recipeId) return;
     const ratio = newPersons / oldPersons;
@@ -665,13 +901,16 @@ function AppProvider({ children }) {
     const removedShopping = (hasOther || !meal.recipeId) ? [] : shopping.filter(linked);
     if (!hasOther && meal.recipeId) setShopping(p => p.filter(s => !linked(s)));
     setMeals(p => p.filter(m => m.id !== id));
+    if (meal.stockUsed?.length) restoreStock(meal.stockUsed);
     const name   = meal.customName || recipes.find(r => r.id === meal.recipeId)?.name || 'Repas';
-    const suffix = removedShopping.length > 0 ? ` · ${removedShopping.length} course${removedShopping.length>1?'s':''} retirée${removedShopping.length>1?'s':''}` : '';
+    const suffix = (removedShopping.length > 0 ? ` · ${removedShopping.length} course${removedShopping.length>1?'s':''} retirée${removedShopping.length>1?'s':''}` : '')
+      + (meal.stockUsed?.length ? ' · stock rendu' : '');
     showSnack(
       `"${name}" retiré du planning${suffix}`,
       () => {
         setMeals(p => [...p, meal]);
         if (removedShopping.length) setShopping(p => [...p, ...removedShopping]);
+        if (meal.stockUsed?.length) deductStock(meal.stockUsed);
       }
     );
   };
@@ -679,7 +918,7 @@ function AppProvider({ children }) {
   const duplicateWeek = (from, to) => {
     const src = meals.filter(m => m.weekKey === from);
     if (!src.length) { showSnack('ℹ️ Aucun repas à dupliquer sur cette semaine'); return; }
-    const copies = src.map(m => ({ ...m, id: genId(), weekKey: to, done: false, addedAt: ts() }));
+    const copies = src.map(({ stockUsed, ...m }) => ({ ...m, id: genId(), weekKey: to, done: false, addedAt: ts() }));
     setMeals(p => [...p, ...copies]);
     showSnack(`✅ ${src.length} repas dupliqués`, () => setMeals(p => p.filter(m => !copies.some(c => c.id === m.id))));
   };
@@ -815,8 +1054,8 @@ function AppProvider({ children }) {
     });
 
   /* ── Catégories ── */
-  const addCat = ({ id = genId(), name, emoji='📦', kw=[] }) =>
-    setCats(p => [...p, { id, name, emoji, kw, order: p.length }]);
+  const addCat = ({ id = genId(), name, emoji='📦', kw=[], stockZone }) =>
+    setCats(p => [...p, { id, name, emoji, kw, order: p.length, ...(stockZone ? { stockZone } : {}) }]);
   const deleteCat = id => {
     const cat      = cats.find(c => c.id === id);
     if (!cat) return;
@@ -913,13 +1152,14 @@ function AppProvider({ children }) {
     if (Array.isArray(d.shopping)) setShopping(d.shopping);
     if (Array.isArray(d.cats))     setCats(d.cats);
     if (Array.isArray(d.cantine))  setCantine(d.cantine);
+    if (Array.isArray(d.stock))    setStock(d.stock);
     if (d.settings && typeof d.settings === 'object' && !Array.isArray(d.settings))
       setSettings({ weeksToShow: 4, householdSize: 6, ...d.settings });
   };
 
   /** Import : met d'abord les données actuelles de côté (récupérables plus tard), puis remplace. */
   const importAllData = (data) => {
-    const prev = { recipes, meals, shopping, cats, settings, cantine };
+    const prev = { recipes, meals, shopping, cats, settings, cantine, stock };
     const entry = { date: ts(), data: prev };
     _mem[PRE_IMPORT_KEY] = entry;
     if (_ls) { try { _ls.setItem(PRE_IMPORT_KEY, JSON.stringify(entry)); } catch {} }
@@ -941,7 +1181,8 @@ function AppProvider({ children }) {
 
   return (
     <AppCtx.Provider value={{
-      recipes, meals, shopping, cats, settings, cantine, snack, setSnack, showSnack,
+      recipes, meals, shopping, cats, settings, cantine, stock, snack, setSnack, showSnack,
+      addStockItem, updateStockItem, deleteStockItem, addStockBatch, stockFromShopping, restockItems, deductStock, restoreStock,
       addRecipe, updateRecipe, duplicateRecipe, deleteRecipe,
       addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek, reportMeals,
       addShoppingItem, deleteShoppingItem, deleteShoppingItemsByIds, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
@@ -1082,6 +1323,7 @@ const TABS = [
   { id:'planning', icon:'📅', label:'Planning' },
   { id:'recipes',  icon:'📖', label:'Recettes' },
   { id:'shopping', icon:'🛒', label:'Courses' },
+  { id:'stock',    icon:'🥫', label:'Stock' },
   { id:'stats',    icon:'📊', label:'Stats' },
   { id:'settings', icon:'⚙️', label:'Options' },
 ];
@@ -1092,6 +1334,7 @@ function TabIcon({ id, size=22 }) {
     planning: <><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M8 3v4M16 3v4"/></>,
     recipes:  <><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4z"/><path d="M5 17a3 3 0 0 1 3-3h10"/></>,
     shopping: <><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/><path d="M3 4h2l2.2 10h10.3l1.8-7H6.2"/></>,
+    stock:    <><path d="M6 4h12v4H6zM6 8h12v12H6z"/><path d="M9 12h6M9 16h6"/></>,
     stats:    <path d="M5 20v-8M12 20V5M19 20v-6"/>,
     settings: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
   };
@@ -1104,7 +1347,8 @@ function TabIcon({ id, size=22 }) {
 }
 
 function AppHeader({ tab }) {
-  const { recipes, shopping } = useApp();
+  const { recipes, shopping, stock } = useApp();
+  const stockAlerts = stock.filter(s => stockNeedsRestock(s) || (s.dlc && daysUntil(s.dlc) <= 1)).length;
   const t = TABS.find(x => x.id===tab);
 
   // Thème moderne : grand titre + petite ligne de contexte, pas de bandeau
@@ -1115,6 +1359,7 @@ function AppHeader({ tab }) {
       planning: `SEMAINE ${wk.split('-W')[1]} · ${getWeekRange(wk).toUpperCase()}`,
       recipes:  `${recipes.length} RECETTE${recipes.length > 1 ? 'S' : ''}`,
       shopping: `${nbArt} ARTICLE${nbArt > 1 ? 'S' : ''} À ACHETER`,
+      stock:    `${stockAlerts} ALERTE${stockAlerts > 1 ? 'S' : ''} · ${stock.length} ARTICLE${stock.length > 1 ? 'S' : ''}`,
       stats:    'VOS HABITUDES',
       settings: 'RÉGLAGES',
     }[tab];
@@ -1164,7 +1409,7 @@ function BottomNav({ tab, setTab }) {
         width:'calc(100% - 28px)', maxWidth:452, height:58,
         background:C.card, border:`1px solid ${C.border}`, borderRadius:26,
         display:'flex', alignItems:'center', justifyContent:'space-around',
-        padding:'0 8px', zIndex:100,
+        padding:'0 4px', zIndex:100,
       }}>
         {TABS.map(item => {
           const active = tab === item.id;
@@ -1174,7 +1419,7 @@ function BottomNav({ tab, setTab }) {
               background: active ? C.accent : 'transparent',
               color: active ? C.onAccent : C.muted,
               border:'none', borderRadius:20, cursor:'pointer', fontFamily:'inherit',
-              padding: active ? '9px 14px' : '9px 12px', fontSize:13, fontWeight:500,
+              padding: active ? '9px 10px' : '9px 7px', fontSize:13, fontWeight:500,
               transition:'all 0.15s',
             }}>
               <TabIcon id={item.id} size={active ? 18 : 22} />
@@ -1220,7 +1465,7 @@ function BottomNav({ tab, setTab }) {
             )}
             {/* Icône + badge */}
             <div style={{ position:'relative' }}>
-              <span style={{ fontSize:26 }}>{item.icon}</span>
+              <span style={{ fontSize:24 }}>{item.icon}</span>
               {item.id === 'shopping' && shopCount > 0 && (
                 <span style={{
                   position:'absolute', top:-4, right:-7,
@@ -1232,9 +1477,9 @@ function BottomNav({ tab, setTab }) {
               )}
             </div>
             <span style={{
-              fontSize:13, fontWeight: active ? 700 : 400,
+              fontSize:11, fontWeight: active ? 700 : 500,
               color: active ? C.sky : C.navMuted,
-              letterSpacing:'0.04em',
+              letterSpacing:'0.02em',
             }}>
               {item.label.toUpperCase()}
             </span>
@@ -1250,9 +1495,9 @@ function BottomNav({ tab, setTab }) {
 //  Affiché après sélection d'une recette dans RecipePicker
 //  Permet de choisir quels ingrédients ajouter aux courses
 // ══════════════════════════════════════════════════════
-function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
+function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel, useStock = false }) {
   useBackHandler(onCancel);
-  const { cats } = useApp();
+  const { cats, stock } = useApp();
 
   // Construit la liste plate de tous les ingrédients avec catégorie
   const allItems = useMemo(() => selections.flatMap(({ recipe, persons }) =>
@@ -1269,10 +1514,26 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
     }))
   ), [selections, cats]);
 
-  // État des cases : tout coché par défaut
+  // « Toujours là » (sel, huile…) : jamais ajouté aux courses sauf si on le coche soi-même
+  const alwaysKeys = useMemo(() => new Set(allItems
+    .filter(i => stock.some(s => s.always && stockNorm(s.name) === stockNorm(i.name))).map(i => i.key)), [allItems, stock]);
+  // État des cases : tout coché par défaut, sauf les « toujours là »
   const [checked, setChecked] = useState(
-    () => new Set(allItems.map(i => i.key))
+    () => new Set(allItems.filter(i => !alwaysKeys.has(i.key)).map(i => i.key))
   );
+  // Prélèvement dans le stock (planning uniquement) : une ligne peut être décochée individuellement
+  const [stockOff, setStockOff] = useState(() => new Set());
+  const toggleStock = (key) => setStockOff(p => { const ns = new Set(p); ns.has(key) ? ns.delete(key) : ns.add(key); return ns; });
+  const plan = useMemo(() => useStock ? planStockUse(allItems.filter(i => checked.has(i.key)), stock, stockOff) : {},
+    [useStock, allItems, checked, stock, stockOff]);
+  const peeks = useMemo(() => {
+    if (!useStock) return {};
+    const o = {};
+    allItems.forEach(i => { o[i.key] = planStockUse([i], stock)[i.key]; });
+    return o;
+  }, [useStock, allItems, stock]);
+  const isCovered = i => plan[i.key]?.status === 'full';
+  const usesStock = i => plan[i.key]?.status === 'full' || plan[i.key]?.status === 'partial';
 
   const toggle = (key) => setChecked(p => {
     const ns = new Set(p);
@@ -1309,16 +1570,30 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
   const checkedCount = checked.size;
   const totalCount   = allItems.length;
   const multiRecipe  = selections.length > 1;
+  const coveredCount = allItems.filter(i => checked.has(i.key) && isCovered(i)).length;
+  const fromStockCount = allItems.filter(i => checked.has(i.key) && usesStock(i)).length;
+  const toBuyCount   = checkedCount - coveredCount;
 
   const handleConfirm = () => {
     const selectedByRecipe = {};
+    const stockUse = {};
     allItems.forEach(item => {
-      if (checked.has(item.key)) {
-        if (!selectedByRecipe[item.recipeId]) selectedByRecipe[item.recipeId] = [];
-        selectedByRecipe[item.recipeId].push(item.id);
+      if (!checked.has(item.key)) return;
+      if (usesStock(item)) {
+        const pl = plan[item.key];
+        const su = stockUse[item.recipeId] || (stockUse[item.recipeId] = { overrides: {}, used: [] });
+        if (pl.use > 0) {
+          const ex = su.used.find(u => u.stockId === pl.item.id);
+          if (ex) ex.qty = r1(ex.qty + pl.use);
+          else su.used.push({ stockId: pl.item.id, name: pl.item.name, zone: pl.item.zone, unit: pl.item.unit || '', qty: pl.use });
+        }
+        if (pl.status === 'partial') su.overrides[item.id] = pl.remain;
+        if (pl.status === 'full') return; // rien à acheter
       }
+      if (!selectedByRecipe[item.recipeId]) selectedByRecipe[item.recipeId] = [];
+      selectedByRecipe[item.recipeId].push(item.id);
     });
-    onConfirm(selectedByRecipe);
+    onConfirm(selectedByRecipe, stockUse);
   };
 
   return (
@@ -1384,11 +1659,14 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
                 {/* Ingrédients */}
                 {items.map(item => {
                   const on = checked.has(item.key);
+                  const pl = plan[item.key];
+                  const pk = peeks[item.key];
+                  const off = on && stockOff.has(item.key) && pk && (pk.status === 'full' || pk.status === 'partial');
                   return (
-                    <div key={item.key} onClick={() => toggle(item.key)} style={{
+                    <div key={item.key} style={{ borderBottom:`1px solid ${C.border}22` }}>
+                    <div onClick={() => toggle(item.key)} style={{
                       display:'flex', alignItems:'center', gap:10,
                       padding:'8px 16px 8px 44px', cursor:'pointer',
-                      borderBottom:`1px solid ${C.border}22`,
                       opacity: on ? 1 : 0.38,
                       transition:'opacity 0.15s',
                     }}>
@@ -1404,9 +1682,28 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
                       {multiRecipe && (
                         <span style={{fontSize:11, color:C.muted, marginRight:4}}>{item.recipeEmoji}</span>
                       )}
-                      {item.qty > 0 && (
-                        <span style={{fontSize:11, color:C.muted}}>{item.qty} {item.unit}</span>
-                      )}
+                      {!on && alwaysKeys.has(item.key)
+                        ? <span style={{fontSize:11, color:C.muted}}>♾ toujours là</span>
+                        : item.qty > 0 && <span style={{fontSize:11, color:C.muted}}>{item.qty} {item.unit}</span>}
+                    </div>
+                    {useStock && on && (pl || off || pk?.status === 'incompat') && (
+                      <div
+                        onClick={() => pl || off ? toggleStock(item.key) : undefined}
+                        role={pl || off ? 'button' : undefined}
+                        aria-label={pl || off ? `Stock : ${item.name}` : undefined}
+                        style={{
+                          margin:'-3px 16px 7px 70px', padding:'3px 9px', borderRadius:8, fontSize:11, lineHeight:1.4,
+                          cursor: pl || off ? 'pointer' : 'default',
+                          background: pl?.status === 'full' ? C.greenBg : pl?.status === 'partial' ? C.orangeBg : 'transparent',
+                          color: pl?.status === 'full' ? C.green : pl?.status === 'partial' ? C.orange : C.muted,
+                          border: pl ? 'none' : `1px dashed ${C.border}`,
+                        }}>
+                        {pl?.status === 'full' && `🥫 Couvert par le stock${pl.use > 0 ? ' · ' + fmtStockQty(pl.use, pl.item.unit) : ''} · rien à acheter`}
+                        {pl?.status === 'partial' && `🥫 ${fmtStockQty(pl.use, pl.item.unit)} du stock · reste ${fmtQU(pl.remain, item.unit)} à acheter`}
+                        {!pl && off && `🥫 En stock : ${fmtStockQty(pk.avail, pk.item.unit)} · non utilisé (toucher pour utiliser)`}
+                        {!pl && !off && pk?.status === 'incompat' && `🥫 En stock : ${fmtStockQty(pk.avail, pk.item.unit)} · unité différente, non déduit`}
+                      </div>
+                    )}
                     </div>
                   );
                 })}
@@ -1422,7 +1719,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
         }}>
           <div style={{fontSize:12, color:C.muted, marginBottom:10, textAlign:'center'}}>
             {checkedCount > 0
-              ? <><span style={{color:C.accent, fontWeight:600}}>{checkedCount}</span> à ajouter · <span>{totalCount-checkedCount}</span> ignorés</>
+              ? <><span style={{color:C.accent, fontWeight:600}}>{toBuyCount}</span> à ajouter{fromStockCount > 0 && <> · <span style={{color:C.green, fontWeight:600}}>{fromStockCount}</span> pris au stock</>} · <span>{totalCount-checkedCount}</span> ignorés</>
               : <span style={{color:C.muted}}>Aucun ingrédient sélectionné</span>}
           </div>
           <div style={{display:'flex', gap:8}}>
@@ -1443,7 +1740,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
               fontSize:13, fontWeight:600,
               cursor: checkedCount > 0 ? 'pointer' : 'default',
               fontFamily:'inherit', transition:'all 0.15s',
-            }}>Ajouter {checkedCount > 0 ? checkedCount : ''} ✓</button>
+            }}>{toBuyCount > 0 ? `Ajouter ${toBuyCount} ✓` : checkedCount > 0 ? 'Valider ✓' : 'Ajouter ✓'}</button>
           </div>
         </div>
       </div>
@@ -1693,6 +1990,7 @@ function PlanningTab() {
       )}
       {filterData && (
         <IngredientFilterModal
+          useStock
           selections={filterData.selections}
           onSkip={() => {
             // Ajoute les repas sans ingrédients
@@ -1701,11 +1999,11 @@ function PlanningTab() {
             showSnack('ℹ️ Repas ajouté · ingrédients non ajoutés à la liste');
           }}
           onCancel={() => setFilterData(null)}
-          onConfirm={(selectedByRecipe) => {
+          onConfirm={(selectedByRecipe, stockUse = {}) => {
             // Ajoute tous les repas et capture leurs IDs pour fromMealId
             const mealIds = {};
             filterData.selections.forEach(({ recipe, persons: p }) => {
-              mealIds[recipe.id] = addMeal(filterData.weekKey, recipe.id, p);
+              mealIds[recipe.id] = addMeal(filterData.weekKey, recipe.id, p, '', stockUse[recipe.id]?.used);
             });
             // Collecte les ingrédients sans correspondance de mot-clé
             const uncatItems = [];
@@ -1723,14 +2021,15 @@ function PlanningTab() {
                 selections: filterData.selections,
                 selectedByRecipe,
                 mealIds,
+                stockUse,
               });
             } else {
               filterData.selections.forEach(({ recipe, persons: p }) => {
                 const ids = selectedByRecipe[recipe.id] || [];
-                if (ids.length) addIngredientsFromRecipe(recipe, p, ids, {}, mealIds[recipe.id]);
+                if (ids.length) addIngredientsFromRecipe(recipe, p, ids, {}, mealIds[recipe.id], stockUse[recipe.id]?.overrides || {});
               });
             }
-            const totalAdded = filterData.selections.reduce((s, { recipe }) => s + (selectedByRecipe[recipe.id]?.length || 0), 0);
+            const totalAdded = filterData.selections.reduce((s, { recipe }) => s + (selectedByRecipe[recipe.id]?.length || 0) + (stockUse[recipe.id]?.used?.length || 0), 0);
             if (totalAdded === 0) showSnack('ℹ️ Repas ajouté · aucun ingrédient sélectionné');
             setFilterData(null);
           }}
@@ -1743,7 +2042,7 @@ function PlanningTab() {
             // 1. Ajoute les ingrédients à la liste de courses
             multiCatData.selections.forEach(({ recipe, persons: p }) => {
               const ids = multiCatData.selectedByRecipe[recipe.id] || [];
-              if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides, multiCatData.mealIds[recipe.id]);
+              if (ids.length) addIngredientsFromRecipe(recipe, p, ids, catOverrides, multiCatData.mealIds[recipe.id], multiCatData.stockUse?.[recipe.id]?.overrides || {});
             });
             // 2. Enregistre le nom de chaque ingrédient comme mot-clé dans sa catégorie assignée
             //    → la prochaine fois que cette recette est ajoutée, la catégorie sera reconnue automatiquement
@@ -1758,7 +2057,7 @@ function PlanningTab() {
             // Annulation : ajoute quand même les ingrédients sans catOverrides
             multiCatData.selections.forEach(({ recipe, persons: p }) => {
               const ids = multiCatData.selectedByRecipe[recipe.id] || [];
-              if (ids.length) addIngredientsFromRecipe(recipe, p, ids, {}, multiCatData.mealIds[recipe.id]);
+              if (ids.length) addIngredientsFromRecipe(recipe, p, ids, {}, multiCatData.mealIds[recipe.id], multiCatData.stockUse?.[recipe.id]?.overrides || {});
             });
             setMultiCatData(null);
           }}
@@ -2057,11 +2356,15 @@ function MealItem({ meal, recipe, onViewRecipe }) {
 }
 
 function RecipePicker({ onClose, onSelect, onSelectFree }) {
-  const { recipes, meals, settings } = useApp();
+  const { recipes, meals, settings, stock } = useApp();
   const [search,      setSearch]      = useState('');
   const [persons,     setPersons]     = useState(settings.householdSize || 6);
   const [selected,    setSelected]    = useState(new Set());
-  const [suggestMode, setSuggestMode] = useState(false);
+  const [mode,        setMode]        = useState('browse'); // browse | suggest | stock
+  const suggestMode = mode === 'suggest';
+  const stockMode   = mode === 'stock';
+  const stockSugg   = useMemo(() => suggestFromStock(recipes, stock), [recipes, stock]);
+  const stockInfo   = useMemo(() => Object.fromEntries(stockSugg.map(x => [x.recipe.id, x])), [stockSugg]);
   const [tagFilter,   setTagFilter]   = useState(null);
   const [freeText,    setFreeText]    = useState('');
 
@@ -2108,7 +2411,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
   // Filtrage + tri
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    let list = recipes.filter(r => {
+    let list = (stockMode ? stockSugg.map(x => x.recipe) : recipes).filter(r => {
       if (tagFilter && !(r.tags||[]).includes(tagFilter)) return false;
       if (q && !r.name.toLowerCase().includes(q) &&
           !(r.ingredients||[]).some(i => i.name.toLowerCase().includes(q))) return false;
@@ -2116,7 +2419,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
     });
     if (suggestMode) list = [...list].sort((a,b) => recipeScore(b) - recipeScore(a));
     return list;
-  }, [recipes, search, tagFilter, suggestMode, recipeScore]);
+  }, [recipes, search, tagFilter, suggestMode, stockMode, stockSugg, recipeScore]);
 
   const toggle = id => setSelected(s => { const ns=new Set(s); ns.has(id)?ns.delete(id):ns.add(id); return ns; });
   const count  = selected.size;
@@ -2153,11 +2456,11 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
           <div style={{ flex:1 }} />
           {/* Toggle mode */}
           <div style={{ display:'flex', background:C.border, borderRadius:9, padding:2, gap:2 }}>
-            {[['browse','🗃 Toutes'],['suggest','💡 Suggestions']].map(([m, label]) => (
-              <button key={m} onClick={() => setSuggestMode(m==='suggest')} style={{
-                background: (suggestMode ? 'suggest' : 'browse')===m ? C.accentDk : 'transparent',
-                color:      (suggestMode ? 'suggest' : 'browse')===m ? C.onAccent : C.muted,
-                border:'none', borderRadius:7, padding:'5px 10px',
+            {[['browse','🗃 Toutes'],['suggest','💡 Suggestions'],['stock','🥫 Stock']].map(([m, label]) => (
+              <button key={m} onClick={() => setMode(m)} style={{
+                background: mode===m ? C.accentDk : 'transparent',
+                color:      mode===m ? C.onAccent : C.muted,
+                border:'none', borderRadius:7, padding:'5px 8px',
                 fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap',
               }}>{label}</button>
             ))}
@@ -2237,6 +2540,11 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
                     {lul && suggestMode && (
                       <span style={{ color: lul.color }}>• {lul.text}</span>
                     )}
+                    {stockMode && stockInfo[r.id] && (
+                      <span style={{ color: stockInfo[r.id].expiring.length ? C.orange : C.green }}>
+                        • 🥫 {stockInfo[r.id].matched}/{stockInfo[r.id].total} en stock{stockInfo[r.id].expiring.length ? ` · ⏰ ${stockInfo[r.id].expiring.join(', ')}` : ''}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2244,7 +2552,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
           })}
           {filtered.length === 0 && (
             <div style={{ textAlign:'center', padding:20, color:C.muted, fontSize:13 }}>
-              {suggestMode ? '🎉 Toutes les recettes ont été faites récemment !' : 'Aucune recette'}
+              {suggestMode ? '🎉 Toutes les recettes ont été faites récemment !' : stockMode ? '🥫 Aucune recette ne correspond à ton stock' : 'Aucune recette'}
             </div>
           )}
         </div>
@@ -2881,10 +3189,12 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
   const weeks = [];
   for (let i = 0; i < 8; i++) weeks.push(shiftWeek(currentWeek, i));
 
-  const doAdd = (ingredientIds = null, catOverrides = {}) => {
-    const mealId = addMeal(selWeek, recipe.id, persons);
+  const doAdd = (ingredientIds = null, catOverrides = {}, su = null) => {
+    const mealId = addMeal(selWeek, recipe.id, persons, '', su?.used);
     if (ingredientIds?.length) {
-      addIngredientsFromRecipe(recipe, persons, ingredientIds, catOverrides, mealId);
+      addIngredientsFromRecipe(recipe, persons, ingredientIds, catOverrides, mealId, su?.overrides || {});
+    } else if (su?.used?.length) {
+      showSnack('🥫 Recette ajoutée · ingrédients pris dans le stock');
     } else {
       showSnack('ℹ️ Recette ajoutée · ingrédients non ajoutés à la liste');
     }
@@ -2892,16 +3202,16 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
     setTimeout(onClose, 900);
   };
 
-  const handleIngredientConfirm = (ingredientIds) => {
+  const handleIngredientConfirm = (ingredientIds, su = null) => {
     setFilterOpen(false); // Ferme immédiatement le filtre pour éviter un double-appel
     const uncat = getUncatIngredients(recipe, ingredientIds, cats);
     if (uncat.length > 0) {
       setMultiCatData({
         uncatItems: uncat.map(ing => ({ id: ing.id, name: ing.name, recipeEmoji: recipe.emoji })),
-        ingredientIds,
+        ingredientIds, su,
       });
     } else {
-      doAdd(ingredientIds);
+      doAdd(ingredientIds, {}, su);
     }
   };
 
@@ -2948,8 +3258,9 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
       {filterOpen && (
         <IngredientFilterModal
           key={persons}
+          useStock
           selections={[{ recipe, persons }]}
-          onConfirm={selectedByRecipe => handleIngredientConfirm(selectedByRecipe[recipe.id] || [])}
+          onConfirm={(selectedByRecipe, stockUse = {}) => handleIngredientConfirm(selectedByRecipe[recipe.id] || [], stockUse[recipe.id] || null)}
           onSkip={() => { setFilterOpen(false); doAdd(); }}
           onCancel={() => setFilterOpen(false)}
         />
@@ -2957,8 +3268,8 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
       {multiCatData && (
         <MultiCategoryAssignModal
           uncatItems={multiCatData.uncatItems}
-          onConfirm={(catOverrides) => { doAdd(multiCatData.ingredientIds, catOverrides); setMultiCatData(null); }}
-          onCancel={() => { doAdd(multiCatData.ingredientIds); setMultiCatData(null); }}
+          onConfirm={(catOverrides) => { doAdd(multiCatData.ingredientIds, catOverrides, multiCatData.su); setMultiCatData(null); }}
+          onCancel={() => { doAdd(multiCatData.ingredientIds, {}, multiCatData.su); setMultiCatData(null); }}
         />
       )}
     </>
@@ -4724,6 +5035,7 @@ function ShoppingTab() {
   const [shopSearch,    setShopSearch]    = useState('');
   const [shopSearchOpen,setShopSearchOpen]= useState(false);
   const [menuOpen,      setMenuOpen]      = useState(false);
+  const [intakeOpen,    setIntakeOpen]    = useState(false);
   const [dragOverCat,  setDragOverCat]  = useState(null);
   const [dragLineCat,  setDragLineCat]  = useState(null); // 'before'|'after' relative to dragOverCat
   const dragRef    = useRef({ type: null, id: null, catId: null });
@@ -4905,6 +5217,13 @@ function ShoppingTab() {
                 animation:'fadeIn 0.12s',
               }}>
                 {checkedCount > 0 && (
+                  <button onClick={() => { setIntakeOpen(true); setMenuOpen(false); }} style={{
+                    display:'block', width:'100%', padding:'10px 14px', background:'none',
+                    color:C.text, border:'none', textAlign:'left', cursor:'pointer', fontSize:13,
+                    borderBottom:`1px solid ${C.border}`,
+                  }}>🥫 Ranger les cochés au stock…</button>
+                )}
+                {checkedCount > 0 && (
                   <button onClick={() => { clearChecked(); setMenuOpen(false); }} style={{
                     display:'block', width:'100%', padding:'10px 14px', background:'none',
                     color:C.text, border:'none', textAlign:'left', cursor:'pointer', fontSize:13,
@@ -5042,6 +5361,10 @@ function ShoppingTab() {
           onSave={(l) => { saveFavList(l); setFavEdit(null); }}
           onDelete={(id) => { deleteFavList(id); setFavEdit(null); }}
         />
+      )}
+
+      {intakeOpen && (
+        <StockIntakeSheet items={shopping.filter(s => s.checked)} onClose={() => setIntakeOpen(false)} onDone={() => setIntakeOpen(false)} />
       )}
 
       {/* ══ MODE COURSES — overlay plein écran ══ */}
@@ -5196,6 +5519,7 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
   useBackHandler(onExit);
   const { clearChecked } = useApp();
   const [clearPrompt, setClearPrompt] = useState(false);
+  const [intakeOpen,  setIntakeOpen]  = useState(false);
 
   const unchecked  = shopping.filter(s => !s.checked);
   const checkedCnt = shopping.filter(s =>  s.checked).length;
@@ -5321,9 +5645,13 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
             {checkedCnt} article{checkedCnt>1?'s':''} récupérés
           </div>
           <div style={{ fontSize:12, color:C.muted, marginBottom:14 }}>
-            Vider les articles récupérés de la liste ?
+            Les ranger dans ton stock, ou simplement les retirer de la liste ?
           </div>
-          <div style={{ display:'flex', gap:8 }}>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <button onClick={() => setIntakeOpen(true)} style={{
+              flex:'1 1 100%', padding:'11px', background:C.accentDk, border:'none',
+              color:C.onAccent, borderRadius:10, fontWeight:700, fontSize:13, cursor:'pointer',
+            }}>🥫 Ranger au stock…</button>
             <button onClick={() => { clearChecked(); onExit(); }} style={{
               flex:2, padding:'11px', background:C.green, border:'none',
               color:C.onAccent, borderRadius:10, fontWeight:700, fontSize:13, cursor:'pointer',
@@ -5334,6 +5662,10 @@ function ShoppingModeOverlay({ shopping, cats, onCheck, onExit }) {
             }}>Garder</button>
           </div>
         </div>
+      )}
+      {intakeOpen && (
+        <StockIntakeSheet items={shopping.filter(s => s.checked)} onClose={() => setIntakeOpen(false)}
+          onDone={() => { setIntakeOpen(false); onExit(); }} />
       )}
     </div>
   );
@@ -6324,7 +6656,7 @@ function SettingsCantineSection() {
 }
 
 function SettingsBackupSection() {
-  const { recipes, meals, shopping, cats, settings, cantine, importAllData, preImport, restorePreImport, showSnack } = useApp();
+  const { recipes, meals, shopping, cats, settings, cantine, stock, importAllData, preImport, restorePreImport, showSnack } = useApp();
   const [importErr, setImportErr] = useState('');
   const [pending,   setPending]   = useState(null); // { data, info } en attente de confirmation
   const [busy,      setBusy]      = useState(false);
@@ -6333,7 +6665,7 @@ function SettingsBackupSection() {
   const handleExport = async () => {
     if (busy) return;
     setBusy(true);
-    const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings, cantine };
+    const data = { version: VERSION, exportDate: new Date().toISOString(), recipes, meals, shopping, cats, settings, cantine, stock };
     const res = await saveTextFile(`meal-plan-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data, null, 2));
     setBusy(false);
     if (res.ok)             showSnack('✅ Sauvegarde enregistrée');
@@ -6367,8 +6699,8 @@ function SettingsBackupSection() {
 
   const fmtDate = (v) => { try { return new Date(v).toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' }); } catch { return ''; } };
   const fmtDateTime = (v) => { try { return new Date(v).toLocaleString('fr-FR', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }); } catch { return ''; } };
-  const current = { recipes: recipes.length, meals: meals.length, shopping: shopping.length, cats: cats.length, cantine: cantine.length };
-  const LABELS = { recipes:'Recettes', meals:'Repas planifiés', shopping:'Articles de courses', cats:'Catégories', cantine:'Menus cantine' };
+  const current = { recipes: recipes.length, meals: meals.length, shopping: shopping.length, cats: cats.length, cantine: cantine.length, stock: stock.length };
+  const LABELS = { recipes:'Recettes', meals:'Repas planifiés', shopping:'Articles de courses', cats:'Catégories', cantine:'Menus cantine', stock:'Articles en stock' };
 
   return (
     <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16 }}>
@@ -6437,6 +6769,7 @@ function SettingsBackupSection() {
 }
 
 const CHANGELOG = [
+  ['3.9.0', 'Nouvel onglet Stock (Sec, Frigo, Congélateur, Maison) : jauges, seuils de réachat, « toujours là », dates limites, cuisiner avec ton stock · fin de courses → stock · au planning, le stock est proposé et déduit (rendu si on retire le repas)'],
   ['3.8.0', 'Tags : écran de gestion (renommer, fusionner, supprimer, doublons) · listes d\'habituels dans Courses · boutons à 2 tailles, champs et textes harmonisés, libellés d\'accessibilité'],
   ['3.7.1', 'Sécurité : écran de secours en cas de plantage · import vérifié, confirmé et annulable · export par la fenêtre « Enregistrer sous » · Annuler sur duplication de semaine et menu cantine · nettoyage du diagnostic OCR'],
   ['3.7.0', 'Catégories : liste glisser-déposer avec compteurs, test d\'un article, éditeur à pastilles, suppression annulable'],
@@ -6555,6 +6888,7 @@ function CategoryForm({ cat, onClose }) {
   const [kwInput,    setKwInput]    = useState('');
   const [showAllKw,  setShowAllKw]  = useState(false);
   const [emojiOpen,  setEmojiOpen]  = useState(false);
+  const [sz,         setSz]         = useState(cat ? catStockZone(cat) : 'none'); // zone de stock proposée en fin de courses
 
   const inp = fieldStyle({ style:{ borderRadius:C.rBtn + 3, fontFamily:'inherit' } });
 
@@ -6574,11 +6908,11 @@ function CategoryForm({ cat, onClose }) {
     if (!trimmed) return;
     const finalKws = kwInput.trim() ? addKw(kwInput) : kws;
     if (isEdit) {
-      const moved = updateCat({ ...cat, emoji, name:trimmed, kw:finalKws });
+      const moved = updateCat({ ...cat, emoji, name:trimmed, kw:finalKws, stockZone: sz });
       // updateCat affiche déjà son propre message (avec Annuler) quand des articles sont déplacés
       if (!moved) showSnack('✅ Catégorie mise à jour');
     } else {
-      addCat({ name:trimmed, emoji, kw:finalKws });
+      addCat({ name:trimmed, emoji, kw:finalKws, stockZone: sz });
       showSnack(`✅ Catégorie "${trimmed}" créée`);
     }
     onClose();
@@ -6619,6 +6953,15 @@ function CategoryForm({ cat, onClose }) {
             <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:4 }}>Nom</label>
             <input value={name} onChange={e => setName(e.target.value)}
               placeholder="Surgelés, Épices, Apéro…" style={inp} />
+          </div>
+        </div>
+
+        {/* Zone de stock proposée quand on a acheté un article de cette catégorie */}
+        <div style={{ marginBottom:14 }}>
+          <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🥫 Rangé dans le stock en fin de courses</label>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            <StockPill on={sz === 'none'} color={C.soft} onClick={() => setSz('none')}>Pas suivi</StockPill>
+            {STOCK_ZONES.map(zz => <StockPill key={zz.id} on={sz === zz.id} color={zz.color} onClick={() => setSz(zz.id)}>{zz.icon} {zz.label}</StockPill>)}
           </div>
         </div>
 
@@ -6745,6 +7088,495 @@ function Snackbar() {
 }
 
 // ══════════════════════════════════════════════════════
+//  STOCK — onglet garde-manger (Sec · Frigo · Congélateur · Maison)
+// ══════════════════════════════════════════════════════
+const parseNum = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? 0 : n; };
+
+/** Emoji de la pastille d'un article : groupe (Maison), sinon emoji de sa catégorie de courses, sinon celui de la zone */
+function stockEmoji(it, cats) {
+  if (it.zone === 'maison') return MAISON_GROUPS.find(g => g.id === it.grp)?.icon || '🏠';
+  if (hasKeywordMatch(it.name, cats)) return cats.find(c => c.id === categorize(it.name, cats))?.emoji || stockZone(it.zone).icon;
+  return stockZone(it.zone).icon;
+}
+
+/** Recettes réalisables (en partie) avec le stock : ingrédients déjà là, et priorité à ce qui se périme. */
+function suggestFromStock(recipes, stock) {
+  const byName = new Map();
+  stock.filter(s => s.zone !== 'maison' && (s.always || (s.qty || 0) > 0) && !(s.dlc && daysUntil(s.dlc) < 0))
+    .forEach(s => { const k = stockNorm(s.name); if (!byName.has(k) || s.dlc) byName.set(k, s); });
+  return recipes.map(r => {
+    const ings = r.ingredients || [];
+    if (!ings.length) return null;
+    const hits = ings.filter(i => byName.has(stockNorm(i.name)));
+    if (!hits.length) return null;
+    const exp = [...new Set(hits.map(i => byName.get(stockNorm(i.name))).filter(s => s.dlc && daysUntil(s.dlc) <= 3).map(s => s.name))];
+    const score = hits.length / ings.length + 0.3 * Math.min(exp.length, 2);
+    return { recipe: r, matched: hits.length, total: ings.length, expiring: exp, score };
+  }).filter(Boolean).sort((a, b) => b.score - a.score || b.matched - a.matched);
+}
+
+const MAISON_CATS = [
+  { name:'Chiens',    emoji:'🐕', kw:['croquettes','pâtée','friandises chien','os à mâcher','antipuces','shampoing chien'] },
+  { name:'Entretien', emoji:'🧽', kw:['lessive','liquide vaisselle','pastilles lave-vaisselle','éponge','javel','sopalin','essuie-tout','produit vitres','sac poubelle','adoucissant','détergent','nettoyant','dégraissant','produit sol','produit multi-usage','liquide de rinçage'] },
+  { name:'Hygiène',   emoji:'🧴', kw:['shampoing','gel douche','savon','dentifrice','brosse à dents','papier toilette','papier wc','coton','déodorant','mouchoirs','rasoir','après-shampoing','cotons-tiges','lingettes','bain de bouche'] },
+];
+
+function StockPill({ on, color, onClick, children, style }) {
+  const col = color || C.accent;
+  return (
+    <button onClick={onClick} style={{
+      padding:'5px 11px', borderRadius:16, cursor:'pointer', fontSize:12, fontWeight: on ? 700 : 500,
+      background: on ? col + '26' : 'transparent', color: on ? col : C.soft,
+      border:`1px solid ${on ? col : C.border}`, fontFamily:'inherit', flexShrink:0, ...style,
+    }}>{children}</button>
+  );
+}
+
+/** Jauge à 4 segments : rouge quand c'est presque vide ou sous le seuil */
+function StockGauge({ item }) {
+  const z = stockZone(item.zone);
+  const cap = item.zone === 'maison' ? 4 : Math.max(item.cap || 0, item.qty || 0, 0.0001);
+  const pct = Math.max(0, Math.min(1, (item.qty || 0) / cap));
+  const lit = (item.qty || 0) <= 0 ? 0 : Math.max(1, Math.round(pct * 4));
+  const low = (item.qty || 0) <= 0 || lit <= 1 || stockNeedsRestock(item);
+  const col = low ? C.red : z.color;
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:5, flexShrink:0 }}>
+      <div style={{ display:'flex', gap:2 }} aria-hidden="true">
+        {[0,1,2,3].map(i => (
+          <div key={i} style={{ width:9, height:16, borderRadius:3, background: i < lit ? col : C.border, opacity: i < lit ? 1 : 0.55 }} />
+        ))}
+      </div>
+      <span style={{ fontSize:12, fontWeight:700, color:col, minWidth:34, textAlign:'right' }}>
+        {(item.qty || 0) <= 0 ? 'vide' : `${Math.round(pct * 100)}%`}
+      </span>
+    </div>
+  );
+}
+
+function stockStep(it) {
+  if (it.zone === 'maison') return 1;
+  if (it.unit === 'g' || it.unit === 'ml') return (it.qty || 0) >= 1000 ? 250 : 100;
+  return 1;
+}
+
+function StockRow({ item, onEdit, onAdjust }) {
+  const { cats } = useApp();
+  const z = stockZone(item.zone);
+  const dn = daysUntil(item.dlc);
+  const dlcCol = dn === null ? C.muted : dn <= 1 ? C.red : dn <= 3 ? C.orange : C.muted;
+  const restock = stockNeedsRestock(item);
+  return (
+    <div style={{
+      display:'flex', alignItems:'center', gap:8, padding:'4px 10px', minHeight:42,
+      background:C.card, border:`1px solid ${restock || (dn !== null && dn <= 1) ? C.red + '66' : C.border}`,
+      borderRadius:C.rRow, marginBottom:4,
+    }}>
+      <div onClick={onEdit} style={{ display:'flex', alignItems:'center', gap:8, flex:1, minWidth:0, cursor:'pointer' }}>
+        <div style={{ width:30, height:30, borderRadius:8, background:z.color + '22', display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, flexShrink:0 }}>
+          {stockEmoji(item, cats)}
+        </div>
+        <div style={{ minWidth:0, flex:1 }}>
+          <div style={{ fontSize:13, fontWeight:600, color:C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.name}</div>
+          <div style={{ fontSize:11, color:C.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+            {item.zone !== 'maison' && <span style={{ color:C.soft }}>{fmtStockQty(item.qty, item.unit)}</span>}
+            {item.min != null && <span>{item.zone !== 'maison' ? ' · ' : ''}seuil {fmtStockQty(item.min, item.unit)}</span>}
+            {item.dlc && <span style={{ color:dlcCol, fontWeight: dn <= 3 ? 700 : 400 }}>{(item.zone !== 'maison' || item.min != null) ? ' · ' : ''}⏰ {fmtDlcLabel(item.dlc)}</span>}
+          </div>
+        </div>
+        <StockGauge item={item} />
+      </div>
+      <div style={{ display:'flex', gap:3, flexShrink:0 }}>
+        <button aria-label={`Moins de ${item.name}`} onClick={() => onAdjust(-stockStep(item))} style={stepBtn}>−</button>
+        <button aria-label={`Plus de ${item.name}`}  onClick={() => onAdjust(+stockStep(item))} style={stepBtn}>+</button>
+      </div>
+    </div>
+  );
+}
+const stepBtn = { width:28, height:28, borderRadius:8, border:'none', background:'rgba(128,140,170,0.18)', color:'inherit', fontSize:16, cursor:'pointer', fontFamily:'inherit', lineHeight:1 };
+
+const STOCK_UNITS = [
+  { id:'g', label:'g' }, { id:'kg', label:'kg' }, { id:'ml', label:'ml' }, { id:'L', label:'L' }, { id:'', label:'pièces' },
+];
+
+/** Fenêtre d'ajout / modification d'un article de stock */
+function StockEditSheet({ item, zone: zone0, onClose }) {
+  const { addStockItem, updateStockItem, deleteStockItem } = useApp();
+  const isNew = !item;
+  const dispUnit = !item ? 'g' : item.unit === 'g' ? (item.qty >= 1000 ? 'kg' : 'g') : item.unit === 'ml' ? (item.qty >= 1000 ? 'L' : 'ml') : (item.unit === 'q' ? '' : item.unit);
+  const fac = u => (u === 'kg' || u === 'L') ? 1000 : 1;
+  const [name,   setName]   = useState(item?.name || '');
+  const [zone,   setZone]   = useState(item?.zone || zone0 || 'sec');
+  const [grp,    setGrp]    = useState(item?.grp || 'Ménage');
+  const [always, setAlways] = useState(!!item?.always);
+  const [unit,   setUnit]   = useState(dispUnit);
+  const [qty,    setQty]    = useState(item && !item.always && item.zone !== 'maison' ? String(r1(item.qty / fac(dispUnit))) : '');
+  const [minTxt, setMinTxt] = useState(item && item.min != null && item.zone !== 'maison' ? String(r1(item.min / fac(dispUnit))) : '');
+  const [level,  setLevel]  = useState(item?.zone === 'maison' ? item.qty : 4);
+  const [minQ,   setMinQ]   = useState(item?.zone === 'maison' ? item.min : null);
+  const [dlc,    setDlc]    = useState(item?.dlc || '');
+  const maison = zone === 'maison';
+  const cold = zone === 'frigo' || zone === 'congel';
+
+  const save = () => {
+    const nm = name.trim();
+    if (!nm) return;
+    let q = 0, u = '', mn = null;
+    if (maison) { q = level; u = 'q'; mn = minQ; }
+    else {
+      u = unit === 'kg' ? 'g' : unit === 'L' ? 'ml' : unit;
+      if (!always) { q = parseNum(qty) * fac(unit); mn = minTxt.trim() ? parseNum(minTxt) * fac(unit) : null; }
+    }
+    const patch = {
+      name: nm, zone, grp: maison ? grp : null, qty: always ? 0 : q, unit: u, always: maison ? false : always,
+      min: always ? null : mn, dlc: cold && dlc ? dlc : null,
+    };
+    if (isNew) addStockItem(patch);
+    else updateStockItem(item.id, { ...patch, cap: Math.max(item.cap || 0, patch.qty) });
+    onClose();
+  };
+  const lab = { fontSize:11, color:C.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', margin:'12px 0 6px' };
+  const zc = stockZone(zone).color;
+
+  return (
+    <BottomSheet title={isNew ? '🥫 Ajouter au stock' : `${stockEmoji(item, []) } Modifier`} onClose={onClose}>
+      <div style={{ padding:'4px 16px 16px' }}>
+        <div style={lab}>Nom</div>
+        <input autoFocus={isNew} value={name} onChange={e => setName(e.target.value)} placeholder="Ex : Pâtes, Lait, Liquide vaisselle…"
+          style={fieldStyle()} aria-label="Nom de l'article" />
+
+        <div style={lab}>Où ?</div>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+          {STOCK_ZONES.map(z => (
+            <StockPill key={z.id} on={zone === z.id} color={z.color} onClick={() => {
+              if (z.id === 'maison' && zone !== 'maison') { setAlways(false); setLevel(4); setMinQ(null); }
+              if (z.id !== 'maison' && zone === 'maison') { setUnit(''); }
+              setZone(z.id);
+            }}>{z.icon} {z.label}</StockPill>
+          ))}
+        </div>
+
+        {maison && (<>
+          <div style={lab}>Rayon</div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            {MAISON_GROUPS.map(g => <StockPill key={g.id} on={grp === g.id} color={zc} onClick={() => setGrp(g.id)}>{g.icon} {g.id}</StockPill>)}
+          </div>
+          <div style={lab}>Niveau</div>
+          <div style={{ display:'flex', gap:6 }}>
+            {[0,1,2,3,4].map(q => <StockPill key={q} on={level === q} color={zc} onClick={() => setLevel(q)} style={{ flex:1, padding:'7px 0' }}>{q * 25}%</StockPill>)}
+          </div>
+          <div style={lab}>Racheter quand il reste…</div>
+          <div style={{ display:'flex', gap:6 }}>
+            <StockPill on={minQ == null} color={zc} onClick={() => setMinQ(null)}>Jamais</StockPill>
+            <StockPill on={minQ === 1} color={zc} onClick={() => setMinQ(1)}>25 %</StockPill>
+            <StockPill on={minQ === 2} color={zc} onClick={() => setMinQ(2)}>50 %</StockPill>
+          </div>
+        </>)}
+
+        {!maison && (<>
+          <div onClick={() => setAlways(a => !a)} style={{
+            display:'flex', alignItems:'center', gap:10, marginTop:14, padding:'9px 12px', cursor:'pointer',
+            background: always ? zc + '1f' : C.bg, border:`1px solid ${always ? zc : C.border}`, borderRadius:10,
+          }}>
+            <span style={{ fontSize:18, color:C.soft }}>♾</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:C.text }}>Toujours là</div>
+              <div style={{ fontSize:11, color:C.muted }}>Sel, huile, épices… jamais ajouté aux courses, pas de quantité</div>
+            </div>
+            <div aria-hidden="true" style={{ width:34, height:20, borderRadius:10, background: always ? zc : C.border, position:'relative' }}>
+              <div style={{ position:'absolute', top:2, left: always ? 16 : 2, width:16, height:16, borderRadius:8, background:'#fff', transition:'left .15s' }} />
+            </div>
+          </div>
+
+          {!always && (<>
+            <div style={lab}>Quantité</div>
+            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+              <input inputMode="decimal" value={qty} onChange={e => setQty(e.target.value)} placeholder="0"
+                style={fieldStyle({ style:{ width:90, textAlign:'center' } })} aria-label="Quantité" />
+              <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+                {STOCK_UNITS.map(u => <StockPill key={u.id || 'pc'} on={unit === u.id} color={zc} onClick={() => setUnit(u.id)} style={{ padding:'5px 9px' }}>{u.label}</StockPill>)}
+              </div>
+            </div>
+            <div style={lab}>Seuil de réachat <span style={{ textTransform:'none', fontWeight:400 }}>(en {unit || 'pièces'}, vide = aucun)</span></div>
+            <input inputMode="decimal" value={minTxt} onChange={e => setMinTxt(e.target.value)} placeholder="Ex : 200"
+              style={fieldStyle({ style:{ width:120, textAlign:'center' } })} aria-label="Seuil de réachat" />
+          </>)}
+          {always && (<>
+            <div style={lab}>Unité habituelle</div>
+            <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+              {STOCK_UNITS.map(u => <StockPill key={u.id || 'pc'} on={unit === u.id} color={zc} onClick={() => setUnit(u.id)} style={{ padding:'5px 9px' }}>{u.label}</StockPill>)}
+            </div>
+          </>)}
+        </>)}
+
+        {cold && (<>
+          <div style={lab}>À consommer avant (DLC)</div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+            {(zone === 'frigo'
+              ? [['+2 j', () => addDaysISO(2)], ['+5 j', () => addDaysISO(5)], ['+7 j', () => addDaysISO(7)], ['+14 j', () => addDaysISO(14)]]
+              : [['+1 mois', () => addMonthsISO(1)], ['+3 mois', () => addMonthsISO(3)], ['+6 mois', () => addMonthsISO(6)]]
+            ).map(([l, f]) => <StockPill key={l} on={dlc === f()} color={zc} onClick={() => setDlc(f())}>{l}</StockPill>)}
+            <StockPill on={!dlc} color={zc} onClick={() => setDlc('')}>Aucune</StockPill>
+          </div>
+          <input type="date" value={dlc} onChange={e => setDlc(e.target.value)} aria-label="Date limite"
+            style={fieldStyle({ dense:true, style:{ marginTop:8, colorScheme:'dark', width:170 } })} />
+        </>)}
+
+        <div style={{ display:'flex', gap:8, marginTop:18 }}>
+          {!isNew && <Btn variant="danger" onClick={() => { deleteStockItem(item.id); onClose(); }}>🗑 Retirer</Btn>}
+          <Btn variant="primary" onClick={save} disabled={!name.trim()} style={{ flex:1, justifyContent:'center' }}>{isNew ? 'Ajouter' : 'OK'}</Btn>
+        </div>
+      </div>
+    </BottomSheet>
+  );
+}
+
+/** « Cuisiner avec ton stock » : recettes qui utilisent ce que tu as, en priorité ce qui se périme */
+function StockCookSheet({ onClose }) {
+  const { recipes, stock } = useApp();
+  const [assign, setAssign] = useState(null);
+  const sugg = useMemo(() => suggestFromStock(recipes, stock).slice(0, 15), [recipes, stock]);
+  return (
+    <>
+      <BottomSheet title="🍳 Cuisiner avec ton stock" onClose={onClose}>
+        <div style={{ padding:'4px 12px 14px' }}>
+          {sugg.length === 0 && <EmptyState icon="🥫" text="Aucune recette ne correspond à ton stock pour l'instant" />}
+          {sugg.length > 0 && <div style={{ fontSize:11, color:C.muted, margin:'4px 4px 8px' }}>Classées : ce qui se périme d'abord, puis le plus d'ingrédients déjà en stock.</div>}
+          {sugg.map(({ recipe, matched, total, expiring }) => (
+            <div key={recipe.id} onClick={() => setAssign(recipe)} style={{
+              display:'flex', alignItems:'center', gap:9, padding:'6px 10px', minHeight:44, cursor:'pointer',
+              background:C.bg, border:`1px solid ${expiring.length ? C.orange + '66' : C.border}`, borderRadius:C.rRow, marginBottom:4,
+            }}>
+              <span style={{ fontSize:22 }}>{recipe.emoji}</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{recipe.name}</div>
+                {expiring.length > 0 && <div style={{ fontSize:11, color:C.orange }}>⏰ utilise : {expiring.join(', ')}</div>}
+              </div>
+              <span style={{ fontSize:12, fontWeight:700, color: matched === total ? C.green : C.soft, flexShrink:0 }}>{matched}/{total}</span>
+            </div>
+          ))}
+        </div>
+      </BottomSheet>
+      {assign && <AssignToWeekModal recipe={assign} onClose={() => { setAssign(null); onClose(); }} />}
+    </>
+  );
+}
+
+/** Fin de courses : range les articles récupérés dans le stock (zone proposée selon la catégorie, modifiable) */
+function StockIntakeSheet({ items, onClose, onDone }) {
+  const { cats, stock, stockFromShopping } = useApp();
+  const ZONE_CYCLE = ['sec', 'frigo', 'congel', 'maison', 'none'];
+  const [rows, setRows] = useState(() => items.map(it => {
+    const cat = cats.find(c => c.id === it.categoryId);
+    const alwaysThere = stock.some(s => s.always && stockNorm(s.name) === stockNorm(it.name));
+    const zone = catStockZone(cat);
+    return { id: it.id, name: it.name, qty: it.qty || 0, unit: it.unit || '', catId: it.categoryId,
+      zone, grp: catMaisonGroup(cat), dlc: '', on: zone !== 'none' && !alwaysThere, alwaysThere };
+  }));
+  const set = (id, patch) => setRows(r => r.map(x => x.id === id ? { ...x, ...patch } : x));
+  const nOn = rows.filter(r => r.on && r.zone !== 'none').length;
+
+  const confirm = () => {
+    const entries = rows.filter(r => r.on && r.zone !== 'none').map(r => {
+      const b = r.qty > 0 ? stockBase(r.qty, r.unit) : { qty: 1, unit: '' };
+      return { name: r.name, zone: r.zone, grp: r.grp, qty: b.qty, unit: b.unit, dlc: (r.zone === 'frigo' || r.zone === 'congel') ? r.dlc : null,
+        buy: r.qty > 0 ? { qty: r.qty, unit: r.unit } : null, catId: r.catId };
+    });
+    stockFromShopping(entries, items.map(i => i.id));
+    onDone();
+  };
+  const skip = () => { stockFromShopping([], items.map(i => i.id)); onDone(); };
+
+  return (
+    <BottomSheet title="🥫 Ranger dans le stock" onClose={onClose}>
+      <div style={{ padding:'2px 12px 0' }}>
+        <div style={{ fontSize:11, color:C.muted, margin:'2px 4px 8px', lineHeight:1.45 }}>
+          Touche la zone pour la changer. Les articles non cochés sont juste retirés de la liste.
+        </div>
+        {rows.map(r => {
+          const zz = r.zone === 'none' ? null : stockZone(r.zone);
+          const cold = r.zone === 'frigo' || r.zone === 'congel';
+          return (
+            <div key={r.id} style={{ padding:'5px 8px', marginBottom:4, background:C.bg, border:`1px solid ${r.on ? (zz?.color || C.border) + '77' : C.border}`, borderRadius:C.rRow, opacity: r.on ? 1 : 0.55 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, minHeight:32 }}>
+                <button aria-label={`${r.on ? 'Ne pas ranger' : 'Ranger'} ${r.name}`} aria-pressed={r.on} onClick={() => set(r.id, { on: !r.on, zone: !r.on && r.zone === 'none' ? 'sec' : r.zone })} style={{
+                  width:20, height:20, borderRadius:5, flexShrink:0, cursor:'pointer', padding:0, fontFamily:'inherit',
+                  background: r.on ? C.accentDk : 'transparent', border:`2px solid ${r.on ? C.accentDk : C.border}`,
+                  color:C.onAccent, fontSize:11, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center',
+                }}>{r.on ? '✓' : ''}</button>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.name}</div>
+                  <div style={{ fontSize:11, color:C.muted }}>{r.alwaysThere ? '♾ déjà « toujours là »' : r.qty > 0 ? fmtQU(r.qty, r.unit) : 'sans quantité → 1'}</div>
+                </div>
+                <button aria-label={`Zone de ${r.name}`} onClick={() => {
+                  const z2 = ZONE_CYCLE[(ZONE_CYCLE.indexOf(r.zone) + 1) % ZONE_CYCLE.length];
+                  set(r.id, { zone: z2, on: z2 !== 'none' });
+                }} style={{
+                  padding:'4px 10px', borderRadius:14, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit', flexShrink:0,
+                  background: zz ? zz.color + '26' : 'transparent', color: zz ? zz.color : C.muted, border:`1px solid ${zz ? zz.color : C.border}`,
+                }}>{zz ? `${zz.icon} ${zz.label}` : 'Aucune'}</button>
+              </div>
+              {r.on && cold && (
+                <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'center', margin:'4px 0 2px 28px' }}>
+                  <span style={{ fontSize:11, color:C.muted }}>⏰</span>
+                  {(r.zone === 'frigo'
+                    ? [['+2 j', () => addDaysISO(2)], ['+5 j', () => addDaysISO(5)], ['+7 j', () => addDaysISO(7)], ['+14 j', () => addDaysISO(14)]]
+                    : [['+1 mois', () => addMonthsISO(1)], ['+3 mois', () => addMonthsISO(3)], ['+6 mois', () => addMonthsISO(6)]]
+                  ).map(([l, f]) => (
+                    <StockPill key={l} on={r.dlc === f()} color={zz.color} onClick={() => set(r.id, { dlc: r.dlc === f() ? '' : f() })} style={{ padding:'2px 8px', fontSize:11 }}>{l}</StockPill>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ position:'sticky', bottom:0, background:C.card, borderTop:`1px solid ${C.border}`, padding:'10px 12px', display:'flex', gap:8 }}>
+        <Btn variant="primary" onClick={confirm} disabled={nOn === 0} style={{ flex:2, justifyContent:'center' }}>🥫 Ajouter {nOn} au stock et vider</Btn>
+        <Btn variant="default" onClick={skip} style={{ flex:1, justifyContent:'center' }}>Vider</Btn>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function StockTab() {
+  const { stock, cats, shopping, settings, updSettings, addCat, updateStockItem, restockItems } = useApp();
+  const [zone,    setZone]    = useState('sec');
+  const [grp,     setGrp]     = useState('all');
+  const [editing, setEditing] = useState(null);   // item | 'new'
+  const [cookOpen, setCookOpen] = useState(false);
+  const z = stockZone(zone);
+
+  const inList = it => shopping.some(s => stockNorm(s.name) === stockNorm(it.name));
+  const zoneItems = stock.filter(s => s.zone === zone);
+  const always = zoneItems.filter(s => s.always).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  const shown = zoneItems.filter(s => !s.always && (zone !== 'maison' || grp === 'all' || s.grp === grp))
+    .sort((a, b) => (a.dlc || '9999').localeCompare(b.dlc || '9999') || a.name.localeCompare(b.name, 'fr'));
+  const toBuy  = zoneItems.filter(stockNeedsRestock);
+  const toBuyNew = toBuy.filter(it => !inList(it));
+  const soon = zoneItems.filter(s => s.dlc && daysUntil(s.dlc) <= 3).sort((a, b) => a.dlc.localeCompare(b.dlc));
+  const alertCount = id => stock.filter(s => s.zone === id && (stockNeedsRestock(s) || (s.dlc && daysUntil(s.dlc) <= 1))).length;
+  const hasMaisonCats = cats.some(c => catStockZone(c) === 'maison');
+  const showMaisonBanner = zone === 'maison' && !hasMaisonCats && !settings.maisonCatsDismissed;
+
+  const adjust = (it, delta) => {
+    const next = it.zone === 'maison' ? Math.max(0, Math.min(4, it.qty + delta)) : Math.max(0, r1((it.qty || 0) + delta));
+    updateStockItem(it.id, { qty: next, cap: Math.max(it.cap || 0, next) });
+  };
+  const createMaisonCats = () => {
+    MAISON_CATS.forEach(c => addCat({ ...c, stockZone:'maison' }));
+    updSettings({ maisonCatsDismissed: true });
+  };
+
+  return (
+    <div style={{ padding:'8px 12px 16px' }}>
+      {/* Actions */}
+      <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+        <Btn small variant="accent" onClick={() => setCookOpen(true)} style={{ flex:1, justifyContent:'center' }}>🍳 Cuisiner avec mon stock</Btn>
+        <Btn small variant="primary" onClick={() => setEditing('new')}>＋ Ajouter</Btn>
+      </div>
+
+      {/* Zones */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6, marginBottom:8 }}>
+        {STOCK_ZONES.map(zz => {
+          const on = zone === zz.id, n = stock.filter(s => s.zone === zz.id).length, al = alertCount(zz.id);
+          return (
+            <button key={zz.id} onClick={() => { setZone(zz.id); setGrp('all'); }} aria-label={zz.label} aria-pressed={on} style={{
+              position:'relative', padding:'6px 2px 5px', borderRadius:C.rRow, cursor:'pointer', fontFamily:'inherit',
+              background: on ? zz.color + '26' : C.card, border:`1.5px solid ${on ? zz.color : C.border}`,
+              display:'flex', flexDirection:'column', alignItems:'center', gap:1,
+            }}>
+              <span style={{ fontSize:20, lineHeight:1.15 }}>{zz.icon}</span>
+              <span style={{ fontSize:11, fontWeight:700, color: on ? zz.color : C.soft, letterSpacing:'-0.01em' }}>{zz.label}</span>
+              <span style={{ fontSize:10, color:C.muted }}>{n} article{n > 1 ? 's' : ''}</span>
+              {al > 0 && <span style={{ position:'absolute', top:-5, right:-3, minWidth:16, height:16, padding:'0 4px', borderRadius:8, background:C.red, color:'#fff', fontSize:10, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' }}>{al}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Rayons Maison : tous visibles */}
+      {zone === 'maison' && (
+        <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:8 }}>
+          <StockPill on={grp === 'all'} color={z.color} onClick={() => setGrp('all')}>Tout · {zoneItems.length}</StockPill>
+          {MAISON_GROUPS.map(g => (
+            <StockPill key={g.id} on={grp === g.id} color={z.color} onClick={() => setGrp(g.id)}>
+              {g.icon} {g.id} · {zoneItems.filter(s => s.grp === g.id).length}
+            </StockPill>
+          ))}
+        </div>
+      )}
+
+      {showMaisonBanner && (
+        <div style={{ padding:'9px 12px', marginBottom:8, background:C.accentBg, border:`1px solid ${C.accent}44`, borderRadius:C.rRow }}>
+          <div style={{ fontSize:12, color:C.soft, lineHeight:1.5, marginBottom:7 }}>
+            Crée les catégories <b>Entretien</b>, <b>Hygiène</b> et <b>Chiens</b> pour que tes achats de la maison soient rangés à part dans les courses (avec des mots-clés prêts).
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn small variant="primary" onClick={createMaisonCats}>Créer</Btn>
+            <Btn small variant="ghost" onClick={() => updSettings({ maisonCatsDismissed: true })}>Plus tard</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* À racheter */}
+      {toBuy.length > 0 && (
+        <div style={{ padding:'8px 10px', marginBottom:8, background:C.redBg, border:`1px solid ${C.red}44`, borderRadius:C.rRow }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ fontSize:12, fontWeight:700, color:C.red, flex:1 }}>🛒 À racheter ({toBuy.length})</span>
+            {toBuyNew.length > 0
+              ? <Btn small variant="danger" onClick={() => restockItems(toBuyNew)}>Ajouter aux courses</Btn>
+              : <span style={{ fontSize:11, color:C.green }}>✓ tout est dans la liste</span>}
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:4, marginTop:6 }}>
+            {toBuy.map(it => (
+              <span key={it.id} onClick={() => setEditing(it)} style={{ fontSize:11, padding:'2px 8px', borderRadius:10, cursor:'pointer', background:C.card, color:C.text, border:`1px solid ${C.border}` }}>
+                {it.name}{inList(it) ? ' · dans la liste' : ''}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* À consommer vite */}
+      {soon.length > 0 && (
+        <div style={{ padding:'8px 10px', marginBottom:8, background:C.orangeBg, border:`1px solid ${C.orange}44`, borderRadius:C.rRow }}>
+          <div style={{ fontSize:12, fontWeight:700, color:C.orange }}>⏰ À consommer vite ({soon.length})</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:4, marginTop:6 }}>
+            {soon.map(it => (
+              <span key={it.id} onClick={() => setEditing(it)} style={{ fontSize:11, padding:'2px 8px', borderRadius:10, cursor:'pointer', background:C.card, color: daysUntil(it.dlc) < 0 ? C.red : C.text, border:`1px solid ${C.border}` }}>
+                {it.name} · {fmtDlcLabel(it.dlc)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Toujours là */}
+      {always.length > 0 && (
+        <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:5, marginBottom:8 }}>
+          <span style={{ fontSize:11, fontWeight:700, color:C.muted, marginRight:2 }}>♾ Toujours là</span>
+          {always.map(it => (
+            <span key={it.id} onClick={() => setEditing(it)} style={{ fontSize:12, padding:'3px 10px', borderRadius:12, cursor:'pointer', background:z.color + '1f', color:z.color, border:`1px solid ${z.color}55`, fontWeight:600 }}>
+              {it.name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Liste */}
+      {shown.length === 0 && always.length === 0 && (
+        <EmptyState icon={z.icon} text={zone === 'maison' ? 'Rien dans cette partie de la maison' : `${z.label} : rien en stock. Ajoute à la main ou à la fin de tes courses.`} />
+      )}
+      {shown.map(it => <StockRow key={it.id} item={it} onEdit={() => setEditing(it)} onAdjust={d => adjust(it, d)} />)}
+
+      {editing && <StockEditSheet item={editing === 'new' ? null : editing} zone={zone} onClose={() => setEditing(null)} />}
+      {cookOpen && <StockCookSheet onClose={() => setCookOpen(false)} />}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
 //  APP SHELL
 // ══════════════════════════════════════════════════════
 function AppShell() {
@@ -6785,6 +7617,7 @@ function AppShell() {
         {tab === 'planning' && <PlanningTab />}
         {tab === 'recipes'  && <RecipesTab />}
         {tab === 'shopping' && <ShoppingTab />}
+        {tab === 'stock'    && <StockTab />}
         {tab === 'stats'    && <StatsTab />}
         {tab === 'settings' && <SettingsTab />}
       </main>
