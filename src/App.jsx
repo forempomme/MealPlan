@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useCallback, createContext, useContext, useE
 // ══════════════════════════════════════════════════════
 //  VERSIONING — source unique de vérité
 // ══════════════════════════════════════════════════════
-const VERSION = "3.7.1"; // v75
+const VERSION = "3.8.0"; // v76
 
 // ══════════════════════════════════════════════════════
 //  GESTION DU BOUTON RETOUR ANDROID (WebView)
@@ -422,6 +422,22 @@ function loadFromStorage(key, defaultValue) {
   return _mem[key] !== undefined ? _mem[key] : defaultValue;
 }
 
+// ── Tags : comparaison insensible à la casse et aux accents ──
+const normTag = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+/** Aligne chaque tag saisi sur la graphie déjà utilisée ailleurs (« plat » → « Plat ») et retire les doublons. */
+function canonTags(list, known) {
+  const byNorm = {};
+  known.forEach(k => { const n = normTag(k); if (!byNorm[n]) byNorm[n] = k; });
+  const seen = new Set(), out = [];
+  list.forEach(t => {
+    const n = normTag(t);
+    if (!n || seen.has(n)) return;
+    seen.add(n);
+    out.push(byNorm[n] || t.trim());
+  });
+  return out;
+}
+
 // ── Sauvegarde / restauration : outils partagés (écran Options ET écran de secours) ──
 const PRE_IMPORT_KEY = 'mp_pre_import'; // copie des données d'avant le dernier import
 const BACKUP_KEYS = ['recipes', 'meals', 'shopping', 'cats', 'settings', 'cantine'];
@@ -679,6 +695,58 @@ function AppProvider({ children }) {
     );
   };
 
+  /* ── Tags (renommer / fusionner / supprimer sur toutes les recettes) ── */
+  const renameTag = (fromList, to) => {
+    const target = String(to).trim();
+    const from = [].concat(fromList);
+    if (!target) return 0;
+    const hit = r => (r.tags || []).some(t => from.includes(t));
+    const prev = recipes.filter(hit).map(r => ({ id: r.id, tags: r.tags }));
+    if (!prev.length) return 0;
+    const rewrite = r => {
+      if (!hit(r)) return r;
+      const seen = new Set(), tags = [];
+      r.tags.map(t => from.includes(t) ? target : t).forEach(t => { if (!seen.has(t)) { seen.add(t); tags.push(t); } });
+      return { ...r, tags };
+    };
+    setRecipes(p => p.map(rewrite));
+    showSnack(
+      `🏷 « ${from.join('», «')} » → « ${target} » · ${prev.length} recette${prev.length>1?'s':''}`,
+      () => setRecipes(p => p.map(r => { const o = prev.find(x => x.id === r.id); return o ? { ...r, tags: o.tags } : r; }))
+    );
+    return prev.length;
+  };
+  const deleteTag = (tag) => {
+    const prev = recipes.filter(r => (r.tags || []).includes(tag)).map(r => ({ id: r.id, tags: r.tags }));
+    if (!prev.length) return;
+    setRecipes(p => p.map(r => (r.tags || []).includes(tag) ? { ...r, tags: r.tags.filter(t => t !== tag) } : r));
+    showSnack(
+      `🏷 « ${tag} » retiré de ${prev.length} recette${prev.length>1?'s':''}`,
+      () => setRecipes(p => p.map(r => { const o = prev.find(x => x.id === r.id); return o ? { ...r, tags: o.tags } : r; }))
+    );
+  };
+
+  /* ── Listes d'habituels (stockées dans settings.favLists → incluses dans export/import) ── */
+  const saveFavList = (list) => {
+    setSettings(p => {
+      const cur = p.favLists || [];
+      return { ...p, favLists: cur.some(l => l.id === list.id) ? cur.map(l => l.id === list.id ? list : l) : [...cur, list] };
+    });
+    showSnack(`✅ Liste « ${list.name} » enregistrée`);
+  };
+  const deleteFavList = (id) => {
+    const cur = settings.favLists || [];
+    const idx = cur.findIndex(l => l.id === id);
+    if (idx < 0) return;
+    const list = cur[idx];
+    setSettings(p => ({ ...p, favLists: (p.favLists || []).filter(l => l.id !== id) }));
+    showSnack(`Liste « ${list.name} » supprimée`, () => setSettings(p => {
+      const c = (p.favLists || []).filter(l => l.id !== id);
+      c.splice(Math.min(idx, c.length), 0, list);
+      return { ...p, favLists: c };
+    }));
+  };
+
   /* ── Courses ── */
   const addShoppingItem = (name, qty, unit, catId) => {
     const newItem = {
@@ -877,7 +945,7 @@ function AppProvider({ children }) {
       addRecipe, updateRecipe, duplicateRecipe, deleteRecipe,
       addMeal, addIngredientsFromRecipe, updateMealPersons, toggleMealDone, updateMeal, deleteMeal, duplicateWeek, reportMeals,
       addShoppingItem, deleteShoppingItem, deleteShoppingItemsByIds, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll,
-      reorderItemsInCat, addCat, deleteCat, updateCat, addKeywordToCat, reorderCats, updSettings, importAllData, preImport, restorePreImport,
+      reorderItemsInCat, addCat, deleteCat, updateCat, addKeywordToCat, reorderCats, updSettings, importAllData, preImport, restorePreImport, renameTag, deleteTag, saveFavList, deleteFavList,
       upsertCantineDay, upsertCantineDays, deleteCantineDay, clearCantine,
       planningTarget, setPlanningTarget,
     }}>
@@ -889,10 +957,12 @@ function AppProvider({ children }) {
 // ══════════════════════════════════════════════════════
 //  PRIMITIVES UI
 // ══════════════════════════════════════════════════════
-function Btn({ onClick, children, variant='default', small, disabled, style }) {
+function Btn({ onClick, children, variant='default', small, disabled, style, label }) {
+  // Deux tailles seulement : normal (fenêtres, formulaires : 40 px) et compact (listes, planning : 32 px)
   const base = {
     display:'inline-flex', alignItems:'center', gap:5,
-    padding: small ? '7px 14px' : '9px 18px',
+    minHeight: small ? 32 : 40,
+    padding: small ? '6px 14px' : '9px 18px',
     borderRadius:C.rBtn, fontWeight:500, fontSize: small?13:15,
     transition:'all 0.15s', cursor: disabled?'not-allowed':'pointer',
     opacity: disabled?0.5:1, border:'none', flexShrink:0,
@@ -907,7 +977,7 @@ function Btn({ onClick, children, variant='default', small, disabled, style }) {
     orange:  { background:C.orangeBg, color:C.orange, border:`1px solid ${C.orange}44` },
   };
   return (
-    <button onClick={disabled?undefined:onClick} style={{ ...base, ...vs[variant], ...style }}>
+    <button onClick={disabled?undefined:onClick} aria-label={label} aria-disabled={disabled || undefined} style={{ ...base, ...vs[variant], ...style }}>
       {children}
     </button>
   );
@@ -931,7 +1001,7 @@ function BottomSheet({ title, onClose, children }) {
           display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0,
         }}>
           <span style={{ fontWeight:700, fontSize:15, color:C.text }}>{title}</span>
-          <button onClick={onClose} style={{
+          <button aria-label="Fermer" onClick={onClose} style={{
             background:C.border, border:'none', color:C.muted,
             width:26, height:26, borderRadius:'50%', cursor:'pointer', fontSize:16, lineHeight:1,
           }}>×</button>
@@ -940,6 +1010,16 @@ function BottomSheet({ title, onClose, children }) {
       </div>
     </div>
   );
+}
+
+const capFirst = t => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** Style de champ de saisie partagé (remplace les objets `inp` dupliqués). */
+function fieldStyle(o = {}) {
+  return {
+    padding: o.dense ? '7px 10px' : '10px 12px', background:C.bg, border:`1px solid ${C.border}`,
+    borderRadius:9, color:C.text, fontSize: o.dense ? 13 : 14, outline:'none', width:'100%', ...o.style,
+  };
 }
 
 // Champ libre pour saisir n'importe quel emoji
@@ -973,7 +1053,7 @@ function Stars({ value, onChange, small }) {
   return (
     <div style={{ display:'flex', gap:1 }}>
       {[1,2,3,4,5].map(n => (
-        <button key={n} onClick={onChange ? () => onChange(n) : undefined} style={{
+        <button aria-label="Favori" key={n} onClick={onChange ? () => onChange(n) : undefined} style={{
           background:'none', border:'none', fontSize: small?14:19,
           color: n<=value ? '#E8C858' : C.border, cursor: onChange?'pointer':'default', padding:2,
         }}>★</button>
@@ -1103,7 +1183,7 @@ function BottomNav({ tab, setTab }) {
                 <span style={{
                   position:'absolute', top:0, right:0, minWidth:16, height:16, padding:'0 4px',
                   background:C.accent, color:C.onAccent, borderRadius:8,
-                  fontSize:10, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center',
+                  fontSize:11, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center',
                 }}>{shopCount > 99 ? '99' : shopCount}</span>
               )}
             </button>
@@ -1146,7 +1226,7 @@ function BottomNav({ tab, setTab }) {
                   position:'absolute', top:-4, right:-7,
                   background:C.sky, color:C.navDk,
                   borderRadius:'50%', width:16, height:16,
-                  fontSize:9, fontWeight:800,
+                  fontSize:11, fontWeight:800,
                   display:'flex', alignItems:'center', justifyContent:'center',
                 }}>{shopCount > 99 ? '99' : shopCount}</span>
               )}
@@ -1322,7 +1402,7 @@ function IngredientFilterModal({ selections, onConfirm, onSkip, onCancel }) {
                       </div>
                       <span style={{flex:1, fontSize:13, color:C.text}}>{item.name}</span>
                       {multiRecipe && (
-                        <span style={{fontSize:10, color:C.muted, marginRight:4}}>{item.recipeEmoji}</span>
+                        <span style={{fontSize:11, color:C.muted, marginRight:4}}>{item.recipeEmoji}</span>
                       )}
                       {item.qty > 0 && (
                         <span style={{fontSize:11, color:C.muted}}>{item.qty} {item.unit}</span>
@@ -1519,7 +1599,7 @@ function PlanningTab() {
           <div style={{ position:'sticky', top: btnVisible ? 36 : 0, zIndex:40, background:C.card, borderBottom:`1px solid ${C.border}` }}>
             {/* Ligne principale : flèches + année */}
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 14px' }}>
-              <button
+              <button aria-label="Précédent"
                 onClick={() => year > MIN_YEAR && setYear(y => y - 1)}
                 disabled={year <= MIN_YEAR}
                 style={{
@@ -1536,7 +1616,7 @@ function PlanningTab() {
                 }}>{year}</span>
                 {year === currentYear && (
                   <span style={{
-                    marginLeft:7, fontSize:10, fontWeight:600,
+                    marginLeft:7, fontSize:11, fontWeight:600,
                     background:C.accentBg, color:C.accent,
                     padding:'2px 8px', borderRadius:10,
                     border:`1px solid ${C.accent}33`,
@@ -1550,7 +1630,7 @@ function PlanningTab() {
                 )}
               </div>
 
-              <button
+              <button aria-label="Suivant"
                 onClick={() => year < MAX_YEAR && setYear(y => y + 1)}
                 disabled={year >= MAX_YEAR}
                 style={{
@@ -1804,8 +1884,8 @@ function WeekCard({ weekKey, isCurrent, onAdd, onDup, onViewRecipe }) {
 
           <div style={{ display:'flex', gap:6, marginTop:6, flexWrap:'wrap' }}>
             <Btn onClick={onAdd} variant="primary" small>+ Ajouter</Btn>
-            <Btn onClick={onDup} variant="ghost" small>📋</Btn>
-            {weekMeals.length > 0 && <Btn onClick={shareWeek} variant="ghost" small>📤</Btn>}
+            <Btn label="Dupliquer" onClick={onDup} variant="ghost" small>📋</Btn>
+            {weekMeals.length > 0 && <Btn label="Partager" onClick={shareWeek} variant="ghost" small>📤</Btn>}
             {unfinishedMeals.length > 0 && (
               <Btn onClick={() => setReportOpen(true)} variant="orange" small>
                 ↷ Reporter
@@ -1880,7 +1960,7 @@ function MealItem({ meal, recipe, onViewRecipe }) {
           <div style={{ display:'flex', gap:6, marginTop:2, alignItems:'center' }}>
             {wasLastWeek && (
               <span style={{
-                fontSize:10, color:C.orange, background:C.orangeBg,
+                fontSize:11, color:C.orange, background:C.orangeBg,
                 border:`1px solid ${C.orange}33`, borderRadius:5,
                 padding:'1px 5px', fontWeight:600, flexShrink:0,
               }}>↩ S.{prevWeek.split('-W')[1]}</span>
@@ -1897,19 +1977,19 @@ function MealItem({ meal, recipe, onViewRecipe }) {
 
       {/* Personnes */}
       <div style={{ display:'flex', alignItems:'center', gap:2, flexShrink:0 }}>
-        <button onClick={() => updateMealPersons(meal.id, -1)} style={{
+        <button aria-label="Moins de personnes" onClick={() => updateMealPersons(meal.id, -1)} style={{
           background:C.border, border:'none', color:C.text,
           width:20, height:20, borderRadius:4, cursor:'pointer', fontSize:13, lineHeight:1,
         }}>−</button>
         <span style={{ fontSize:12, color:C.muted, minWidth:22, textAlign:'center' }}>👥{meal.persons}</span>
-        <button onClick={() => updateMealPersons(meal.id, +1)} style={{
+        <button aria-label="Plus de personnes" onClick={() => updateMealPersons(meal.id, +1)} style={{
           background:C.border, border:'none', color:C.text,
           width:20, height:20, borderRadius:4, cursor:'pointer', fontSize:13, lineHeight:1,
         }}>+</button>
       </div>
 
       {/* Note */}
-      <button onClick={openNote} style={{
+      <button aria-label="Note" onClick={openNote} style={{
         background: meal.note ? C.orangeBg : 'transparent',
         border: meal.note ? `1px solid ${C.orange}44` : '1px solid transparent',
         color: meal.note ? C.orange : C.muted,
@@ -1918,7 +1998,7 @@ function MealItem({ meal, recipe, onViewRecipe }) {
       }}>📝</button>
 
       {/* Supprimer */}
-      <button onClick={() => deleteMeal(meal.id)} style={{
+      <button aria-label="Supprimer" onClick={() => deleteMeal(meal.id)} style={{
         background:'transparent', border:'none',
         color:C.muted, borderRadius:6, padding:'2px 6px',
         cursor:'pointer', fontSize:12, flexShrink:0,
@@ -1940,7 +2020,7 @@ function MealItem({ meal, recipe, onViewRecipe }) {
             <span style={{ fontWeight:700, color:C.text, fontSize:14 }}>
               📝 Note — {mealName}
             </span>
-            <button onClick={() => setNoteOpen(false)} style={{ background:'transparent', border:'none', color:C.muted, cursor:'pointer', fontSize:18, lineHeight:1 }}>✕</button>
+            <button aria-label="Fermer" onClick={() => setNoteOpen(false)} style={{ background:'transparent', border:'none', color:C.muted, cursor:'pointer', fontSize:18, lineHeight:1 }}>✕</button>
           </div>
           <textarea
             value={draftNote}
@@ -2067,9 +2147,9 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
         {/* ── Ligne 1 : personnes + mode ── */}
         <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
           <span style={{ color:C.muted, fontSize:13 }}>👥</span>
-          <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>−</button>
+          <button aria-label="Moins de personnes" onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>−</button>
           <span style={{ fontWeight:700, color:C.text, minWidth:22, textAlign:'center', fontSize:14 }}>{persons}</span>
-          <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>+</button>
+          <button aria-label="Plus de personnes" onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:15 }}>+</button>
           <div style={{ flex:1 }} />
           {/* Toggle mode */}
           <div style={{ display:'flex', background:C.border, borderRadius:9, padding:2, gap:2 }}>
@@ -2089,7 +2169,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
           <input placeholder="🔍 Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}
             style={{ flex:1, padding:'7px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none' }}
           />
-          <button
+          <button aria-label="Au hasard"
             onClick={pickRandom}
             title="Recette aléatoire (favorise les moins récentes)"
             style={{
@@ -2149,7 +2229,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
                   <div style={{ display:'flex', alignItems:'baseline', gap:6 }}>
                     <span style={{ fontWeight:500, fontSize:15, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{r.name}</span>
                     {isNew && suggestMode && (
-                      <span style={{ fontSize:9, fontWeight:700, color:C.green, background:C.greenBg, border:`1px solid ${C.green}44`, borderRadius:6, padding:'1px 5px', flexShrink:0 }}>NOUVEAU</span>
+                      <span style={{ fontSize:11, fontWeight:700, color:C.green, background:C.greenBg, border:`1px solid ${C.green}44`, borderRadius:6, padding:'1px 5px', flexShrink:0 }}>NOUVEAU</span>
                     )}
                   </div>
                   <div style={{ fontSize:11, color:C.muted, display:'flex', gap:8, marginTop:1 }}>
@@ -2181,7 +2261,7 @@ function RecipePicker({ onClose, onSelect, onSelectFree }) {
                 onKeyDown={e => { if (e.key==='Enter' && freeText.trim()) { onSelectFree(freeText.trim(), persons); onClose(); }}}
                 style={{ flex:1, padding:'7px 10px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none' }}
               />
-              <button
+              <button aria-label="Ajouter"
                 onClick={() => { if (freeText.trim()) { onSelectFree(freeText.trim(), persons); onClose(); }}}
                 disabled={!freeText.trim()}
                 style={{
@@ -2455,7 +2535,7 @@ function CantineDayEditModal({ date, existing, onClose, upsertCantineDay }) {
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const d = new Date(date + 'T00:00:00');
-  const inp = { padding:'9px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:14, outline:'none', width:'100%' };
+  const inp = fieldStyle({ style:{ padding:'9px 12px' } });
 
   const save = () => { upsertCantineDay(date, form); onClose(); };
 
@@ -2668,7 +2748,7 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
     ? allTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase()))
     : allTags;
 
-  const inp = { padding:'8px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none', width:'100%' };
+  const inp = fieldStyle({ dense:true, style:{ padding:'8px 11px' } });
 
   const SORT_OPTIONS = [
     { v:'newest',    label:'📅 Plus récente' },
@@ -2740,7 +2820,7 @@ function FilterModal({ onClose, filterFav, setFilterFav, filterTags, setFilterTa
           <SecTitle>
             Tags
             {filterTags.length > 0 && (
-              <span style={{ marginLeft:8, background:C.accentBg, color:C.accent, fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:20, border:`1px solid ${C.accent}44`, verticalAlign:'middle' }}>
+              <span style={{ marginLeft:8, background:C.accentBg, color:C.accent, fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:20, border:`1px solid ${C.accent}44`, verticalAlign:'middle' }}>
                 {filterTags.length} sélectionné{filterTags.length > 1 ? 's' : ''}
               </span>
             )}
@@ -2842,9 +2922,9 @@ function AssignToWeekModal({ recipe, viewPortions, onClose }) {
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
             <span style={{ color:C.muted, fontSize:13, flex:1 }}>👥 Personnes</span>
-            <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
+            <button aria-label="Moins de personnes" onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
             <span style={{ fontWeight:700, color:C.text, minWidth:24, textAlign:'center' }}>{persons}</span>
-            <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
+            <button aria-label="Plus de personnes" onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
           </div>
           <SecTitle>Semaine</SecTitle>
           {weeks.map(w => (
@@ -2904,12 +2984,12 @@ function RecipeCard({ recipe, onClick, onDelete, onTypeChange, onSeasonsChange }
             {recipe.name}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
-            <span style={{ fontSize:10, color:C.muted }}>
+            <span style={{ fontSize:11, color:C.muted }}>
               🍽 {recipe.portions}p{recipe.cookTimeMinutes > 0 ? ` · ⏱ ${recipe.cookTimeMinutes}m` : ''}
             </span>
             {mealCount > 0 && (
               <span style={{
-                fontSize:9, fontWeight:700, color:C.accent,
+                fontSize:11, fontWeight:700, color:C.accent,
                 background:C.accentBg, border:`1px solid ${C.accent}33`,
                 borderRadius:8, padding:'1px 6px', letterSpacing:'0.02em',
               }}>
@@ -2945,7 +3025,7 @@ function RecipeCard({ recipe, onClick, onDelete, onTypeChange, onSeasonsChange }
             ? <span style={{ fontSize:12, lineHeight:1 }}>⭐</span>
             : <span style={{ width:12 }} />
           }
-          <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{
+          <button aria-label="Supprimer" onClick={e => { e.stopPropagation(); onDelete(); }} style={{
             background:'transparent', border:'none',
             color:C.muted, borderRadius:5, padding:'1px 4px',
             cursor:'pointer', fontSize:11,
@@ -2956,14 +3036,14 @@ function RecipeCard({ recipe, onClick, onDelete, onTypeChange, onSeasonsChange }
       {/* Toggle Salé / Sucré */}
       <div style={{ display:'flex', gap:4, marginTop:8, borderTop:`1px solid ${C.border}`, paddingTop:7 }}>
         <button onClick={e => { e.stopPropagation(); onTypeChange?.('savory'); }} style={{
-          flex:1, padding:'4px 0', borderRadius:7, fontSize:10, fontWeight:600, cursor:'pointer',
+          flex:1, padding:'4px 0', borderRadius:7, fontSize:11, fontWeight:600, cursor:'pointer',
           background: recipe.type==='savory' ? C.accentBg : 'transparent',
           border:`1px solid ${recipe.type==='savory' ? C.accent+'55' : C.border}`,
           color: recipe.type==='savory' ? C.accent : C.muted,
           transition:'all 0.12s',
         }}>🧂 Salé</button>
         <button onClick={e => { e.stopPropagation(); onTypeChange?.('sweet'); }} style={{
-          flex:1, padding:'4px 0', borderRadius:7, fontSize:10, fontWeight:600, cursor:'pointer',
+          flex:1, padding:'4px 0', borderRadius:7, fontSize:11, fontWeight:600, cursor:'pointer',
           background: recipe.type==='sweet' ? C.sweetBg : 'transparent',
           border:`1px solid ${recipe.type==='sweet' ? C.sweet+'55' : C.border}`,
           color: recipe.type==='sweet' ? C.sweet : C.muted,
@@ -3041,9 +3121,9 @@ function AddToListModal({ recipe, defaultPersons, onClose }) {
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:18 }}>
               <span style={{ fontSize:13, color:C.muted, flex:1 }}>👥 Pour combien de personnes ?</span>
-              <button onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
+              <button aria-label="Moins de personnes" onClick={() => setPersons(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>−</button>
               <span style={{ fontWeight:700, fontSize:18, color:C.accent, minWidth:24, textAlign:'center' }}>{persons}</span>
-              <button onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
+              <button aria-label="Plus de personnes" onClick={() => setPersons(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:28, height:28, borderRadius:8, cursor:'pointer', fontSize:16 }}>+</button>
             </div>
             <Btn onClick={() => setFilterOpen(true)} variant="primary" style={{ width:'100%', justifyContent:'center' }}>
               Choisir les ingrédients →
@@ -3162,8 +3242,8 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
         <Btn onClick={onClose} small>← Retour</Btn>
         <div style={{ display:'flex', gap:6 }}>
           <Btn onClick={() => setAssignOpen(true)} variant="green" small>📅 Affecter</Btn>
-          <Btn onClick={share} variant="accent" small>📤</Btn>
-          {onEdit && <Btn onClick={onEdit} small>✏️</Btn>}
+          <Btn label="Partager" onClick={share} variant="accent" small>📤</Btn>
+          {onEdit && <Btn label="Modifier" onClick={onEdit} small>✏️</Btn>}
         </div>
       </div>
 
@@ -3203,7 +3283,7 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
               {missingIngredients.length > 0 && (
                 <span style={{
                   background:C.accentDk, color:C.onAccent,
-                  borderRadius:12, fontSize:10, fontWeight:800,
+                  borderRadius:12, fontSize:11, fontWeight:800,
                   padding:'1px 6px', minWidth:18, textAlign:'center', flexShrink:0,
                 }}>{missingIngredients.length}</span>
               )}
@@ -3301,9 +3381,9 @@ function RecipeDetail({ recipe, onClose, onEdit, onDelete, onDuplicate }) {
             )}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:5 }}>
-            <button onClick={() => setViewPortions(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:16 }}>−</button>
+            <button aria-label="Moins de portions" onClick={() => setViewPortions(p=>Math.max(1,p-1))} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:16 }}>−</button>
             <span style={{ fontWeight:700, color:C.text, minWidth:26, textAlign:'center', fontSize:14 }}>{viewPortions}</span>
-            <button onClick={() => setViewPortions(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:16 }}>+</button>
+            <button aria-label="Plus de portions" onClick={() => setViewPortions(p=>p+1)} style={{ background:C.border, border:'none', color:C.text, width:26, height:26, borderRadius:7, cursor:'pointer', fontSize:16 }}>+</button>
             {viewPortions !== base && (
               <button onClick={() => setViewPortions(base)} title="Réinitialiser" style={{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:13, paddingLeft:4 }}>↺</button>
             )}
@@ -3535,7 +3615,7 @@ function CookModeOverlay({ recipe, portions, onClose }) {
                   <div style={{ fontSize:26, fontWeight:800, color:timerColor, letterSpacing:'-0.02em', lineHeight:1 }}>
                     {timerDone ? '✓ Terminé !' : fmtTimer(timerSec)}
                   </div>
-                  <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)', marginTop:2 }}>
+                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', marginTop:2 }}>
                     {timerSec === null ? `⏱ ${Math.round(stepDur/60)} min suggérées` : timerOn ? 'En cours…' : timerDone ? '' : 'En pause'}
                   </div>
                 </div>
@@ -3559,7 +3639,7 @@ function CookModeOverlay({ recipe, portions, onClose }) {
 
           {/* Boutons de navigation */}
           <div style={{ padding:'4px 16px 28px', display:'flex', gap:8, flexShrink:0 }}>
-            <button onClick={() => stepIdx > 0 && setStepIdx(i=>i-1)} disabled={stepIdx===0} style={{
+            <button aria-label="Retour" onClick={() => stepIdx > 0 && setStepIdx(i=>i-1)} disabled={stepIdx===0} style={{
               flex:1, padding:'13px', borderRadius:13,
               background:'rgba(92,196,160,0.07)', border:'1px solid rgba(92,196,160,0.18)',
               color: stepIdx===0 ? 'rgba(92,196,160,0.2)' : C.green,
@@ -3577,7 +3657,7 @@ function CookModeOverlay({ recipe, portions, onClose }) {
             </button>
 
             {stepIdx < total-1 && (
-              <button onClick={() => setStepIdx(i=>i+1)} style={{
+              <button aria-label="Suivant" onClick={() => setStepIdx(i=>i+1)} style={{
                 flex:1, padding:'13px', borderRadius:13,
                 background:'rgba(92,196,160,0.07)', border:'1px solid rgba(92,196,160,0.18)',
                 color:C.green, fontSize:18, cursor:'pointer',
@@ -3606,7 +3686,7 @@ function CookModeOverlay({ recipe, portions, onClose }) {
                   <span style={{ fontSize:11, color:'rgba(92,196,160,0.5)', marginLeft:6 }}>({portions} pers.)</span>
                 )}
               </span>
-              <button onClick={() => setIngOpen(false)} style={{ background:'transparent', border:'none', color:'rgba(92,196,160,0.5)', fontSize:18, cursor:'pointer' }}>✕</button>
+              <button aria-label="Fermer" onClick={() => setIngOpen(false)} style={{ background:'transparent', border:'none', color:'rgba(92,196,160,0.5)', fontSize:18, cursor:'pointer' }}>✕</button>
             </div>
             {(recipe.ingredients||[]).map((ing, i) => {
               const q = ing.qty ? Math.round(ing.qty * scale * 10) / 10 : 0;
@@ -3684,7 +3764,7 @@ function WeeksBadge({ recipeId }) {
         {rest > 0 && (
           <span style={{
             background:C.accent, color:C.onAccent,
-            borderRadius:10, fontSize:10, fontWeight:700,
+            borderRadius:10, fontSize:11, fontWeight:700,
             padding:'0 5px', lineHeight:'16px',
           }}>+{rest}</span>
         )}
@@ -4103,7 +4183,8 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     if (!form.name.trim()) return;
     onSave({
       ...form,
-      tags: form.tagsStr.split(',').map(t=>t.trim()).filter(Boolean),
+      tags: canonTags(form.tagsStr.split(',').map(t=>t.trim()).filter(Boolean),
+        recipes.filter(r => r.id !== recipe.id).flatMap(r => r.tags || [])),
       ingredients: form.ingredients.filter(i=>i.name.trim()),
       steps: form.steps.filter(s=>s.trim()),
       portions: parseInt(form.portions)||6,
@@ -4112,7 +4193,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
     });
   };
 
-  const inp = { padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:14, outline:'none', width:'100%' };
+  const inp = fieldStyle({ style:{ padding:'8px 12px' } });
 
   return (
     <>
@@ -4268,14 +4349,14 @@ function RecipeEditor({ recipe, onClose, onSave }) {
           <div>
             <label style={{ fontSize:12, color:C.muted, display:'block', marginBottom:5 }}>🍽 Portions</label>
             <div style={{ display:'flex', alignItems:'center', gap:8, height:36 }}>
-              <button onClick={() => adjustPortions(-1)} style={{
+              <button aria-label="Moins de portions" onClick={() => adjustPortions(-1)} style={{
                 background:C.border, border:'none', color:C.text, width:32, height:32,
                 borderRadius:8, cursor:'pointer', fontSize:18, flexShrink:0, lineHeight:1,
               }}>−</button>
               <span style={{ fontWeight:700, color:C.text, minWidth:28, textAlign:'center', fontSize:16 }}>
                 {parseInt(form.portions)||1}
               </span>
-              <button onClick={() => adjustPortions(1)} style={{
+              <button aria-label="Plus de portions" onClick={() => adjustPortions(1)} style={{
                 background:C.border, border:'none', color:C.text, width:32, height:32,
                 borderRadius:8, cursor:'pointer', fontSize:18, flexShrink:0, lineHeight:1,
               }}>+</button>
@@ -4360,7 +4441,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
             <select value={ing.unit} onChange={e=>updIng(ing.id,'unit',e.target.value)} style={{ ...inp, flex:1 }}>
               {UNITS.map(u => <option key={u} value={u}>{u||'—'}</option>)}
             </select>
-            <button onClick={()=>remIng(ing.id)} style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:18, padding:'0 4px' }}>×</button>
+            <button aria-label="Supprimer l’ingrédient" onClick={()=>remIng(ing.id)} style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:18, padding:'0 4px' }}>×</button>
           </div>
         ))}
         <Btn onClick={addIng} variant="ghost" small style={{ marginBottom:20 }}>+ Ingrédient</Btn>
@@ -4371,7 +4452,7 @@ function RecipeEditor({ recipe, onClose, onSave }) {
             <span style={{ color:C.muted, fontWeight:700, fontSize:13, paddingTop:9, minWidth:18 }}>{i+1}.</span>
             <textarea value={step} onChange={e=>updStep(i,e.target.value)} placeholder={`Étape ${i+1}...`} rows={2}
               style={{ ...inp, resize:'vertical', flex:1 }} />
-            <button onClick={()=>remStep(i)} style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:18, paddingTop:6 }}>×</button>
+            <button aria-label="Supprimer l’étape" onClick={()=>remStep(i)} style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:18, paddingTop:6 }}>×</button>
           </div>
         ))}
         <Btn onClick={addStep} variant="ghost" small style={{ marginBottom:20 }}>+ Étape</Btn>
@@ -4431,7 +4512,7 @@ function MultiCategoryAssignModal({ uncatItems, onConfirm, onCancel }) {
   }, [cats]);
 
   const allAssigned = uncatItems.every(i => assignments[i.id]);
-  const inp = { padding:'7px 10px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:12, outline:'none' };
+  const inp = fieldStyle({ style:{ padding:'7px 10px', fontSize:12, borderRadius:8, width:'auto' } });
 
   const applyBulk = () => {
     if (!bulkCat) return;
@@ -4539,7 +4620,7 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
   const [newName,   setNewName]   = useState('');
   const [newEmoji,  setNewEmoji]  = useState('📦');
 
-  const inp = { padding:'8px 11px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, color:C.text, fontSize:13, outline:'none' };
+  const inp = fieldStyle({ dense:true, style:{ padding:'8px 11px', width:'auto' } });
 
   const handleCreateAndAdd = () => {
     if (!newName.trim()) return;
@@ -4631,7 +4712,11 @@ function CategoryAssignModal({ item, onConfirm, onCancel }) {
 //  COURSES TAB
 // ══════════════════════════════════════════════════════
 function ShoppingTab() {
-  const { shopping, cats, recipes, meals, addShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll, showSnack, reorderCats, addKeywordToCat } = useApp();
+  const { shopping, cats, recipes, meals, settings, addShoppingItem, deleteItemsByCategory, updateShoppingItem, clearChecked, clearAll, showSnack, reorderCats, addKeywordToCat, saveFavList, deleteFavList } = useApp();
+  const favLists = settings.favLists || [];
+  const [favOpenId, setFavOpenId] = useState(null);   // liste ouverte pour sélection
+  const [favEdit,   setFavEdit]   = useState(null);   // null | 'new' | id de liste en édition
+  const [favUncat,  setFavUncat]  = useState(null);   // { list, items } à catégoriser
   const [newName,  setNewName]  = useState('');
   const [newQty,   setNewQty]   = useState('');
   const [newUnit,  setNewUnit]  = useState('');
@@ -4782,12 +4867,15 @@ function ShoppingTab() {
           style={{ width:44, flexShrink:0, padding:'5px 2px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:7, color:C.text, fontSize:11, outline:'none' }}>
           {UNITS.map(u => <option key={u} value={u}>{u||'—'}</option>)}
         </select>
-        <button onClick={handleAdd} style={{
+        <button aria-label="Ajouter" onClick={handleAdd} style={{
           background:C.accentDk, color:C.onAccent, border:'none', borderRadius:7,
           width:28, height:28, fontSize:18, cursor:'pointer', flexShrink:0,
           display:'flex', alignItems:'center', justifyContent:'center',
         }}>+</button>
       </div>
+
+      {/* ── Listes d'habituels ── */}
+      <FavListsBar lists={favLists} onOpen={setFavOpenId} onNew={() => setFavEdit('new')} />
 
       {/* ── Barre articles + actions ── */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
@@ -4804,11 +4892,11 @@ function ShoppingTab() {
               cursor:'pointer', display:'flex', alignItems:'center', gap:4,
             }}>🛍 Faire les courses</button>
           )}
-          <Btn onClick={() => { setShopSearchOpen(v => !v); if (shopSearchOpen) setShopSearch(''); }}
+          <Btn label="Rechercher" onClick={() => { setShopSearchOpen(v => !v); if (shopSearchOpen) setShopSearch(''); }}
             small variant={shopSearchOpen ? 'accent' : 'ghost'}>🔍</Btn>
-          <Btn onClick={shareList} small variant="ghost">📤</Btn>
+          <Btn label="Partager" onClick={shareList} small variant="ghost">📤</Btn>
           <div style={{ position:'relative' }}>
-            <Btn onClick={() => setMenuOpen(m=>!m)} small variant="ghost">⋯</Btn>
+            <Btn label="Plus d’actions" onClick={() => setMenuOpen(m=>!m)} small variant="ghost">⋯</Btn>
             {menuOpen && (
               <div style={{
                 position:'absolute', right:0, top:'110%', background:C.card,
@@ -4880,7 +4968,7 @@ function ShoppingTab() {
             <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background:C.orangeBg }}>
               <span style={{ fontSize:15 }}>⚠️</span>
               <span style={{ fontWeight:600, fontSize:12, color:C.orange, flex:1 }}>Non catégorisé</span>
-              <span style={{ fontSize:10, fontWeight:700, color:C.onAccent, background:C.orange, padding:'1px 7px', borderRadius:20 }}>{orphans.length}</span>
+              <span style={{ fontSize:11, fontWeight:700, color:C.onAccent, background:C.orange, padding:'1px 7px', borderRadius:20 }}>{orphans.length}</span>
             </div>
             <div style={{ background:C.bg }}>
               {orphans.map(item => (
@@ -4919,6 +5007,43 @@ function ShoppingTab() {
         />
       )}
 
+      {favOpenId && favLists.find(l => l.id === favOpenId) && (
+        <FavListPicker
+          list={favLists.find(l => l.id === favOpenId)}
+          onClose={() => setFavOpenId(null)}
+          onEdit={() => { setFavEdit(favOpenId); setFavOpenId(null); }}
+          onAdd={(picked) => {
+            const list = favLists.find(l => l.id === favOpenId);
+            setFavOpenId(null);
+            const unknown = picked.filter(it => !hasKeywordMatch(it.name, cats));
+            if (unknown.length) { setFavUncat({ list, items: picked, unknown }); return; }
+            picked.forEach(it => addShoppingItem(it.name, '', '', categorize(it.name, cats)));
+            showSnack(`✅ ${picked.length} article${picked.length>1?'s':''} ajouté${picked.length>1?'s':''} · ${list.emoji} ${list.name}`);
+          }}
+        />
+      )}
+      {favUncat && (
+        <MultiCategoryAssignModal
+          uncatItems={favUncat.unknown.map(it => ({ id: it.id, name: it.name, recipeEmoji: favUncat.list.emoji, recipeName: favUncat.list.name }))}
+          onCancel={() => setFavUncat(null)}
+          onConfirm={(overrides) => {
+            const { list, items } = favUncat;
+            items.forEach(it => addShoppingItem(it.name, '', '', overrides[it.id] || categorize(it.name, cats)));
+            favUncat.unknown.forEach(it => { if (overrides[it.id]) addKeywordToCat(overrides[it.id], it.name.trim().toLowerCase()); });
+            showSnack(`✅ ${items.length} article${items.length>1?'s':''} ajouté${items.length>1?'s':''} · ${list.emoji} ${list.name}`);
+            setFavUncat(null);
+          }}
+        />
+      )}
+      {favEdit && (
+        <FavListEditor
+          list={favEdit === 'new' ? null : favLists.find(l => l.id === favEdit)}
+          onClose={() => setFavEdit(null)}
+          onSave={(l) => { saveFavList(l); setFavEdit(null); }}
+          onDelete={(id) => { deleteFavList(id); setFavEdit(null); }}
+        />
+      )}
+
       {/* ══ MODE COURSES — overlay plein écran ══ */}
       {shopMode && <ShoppingModeOverlay
         shopping={shopping}
@@ -4927,6 +5052,143 @@ function ShoppingTab() {
         onExit={() => setShopMode(false)}
       />}
     </div>
+  );
+}
+
+/** Rangée compacte des listes d'habituels (Courses). */
+function FavListsBar({ lists, onOpen, onNew }) {
+  const chip = {
+    display:'inline-flex', alignItems:'center', gap:5, height:30, padding:'0 11px', borderRadius:20,
+    fontSize:13, background:C.card, border:`1px solid ${C.border}`, color:C.text,
+    whiteSpace:'nowrap', flexShrink:0, cursor:'pointer', fontFamily:'inherit',
+  };
+  return (
+    <div style={{ display:'flex', gap:6, overflowX:'auto', marginBottom:8, paddingBottom:2 }}>
+      {lists.map(l => (
+        <button key={l.id} onClick={() => onOpen(l.id)} style={chip} aria-label={`Liste ${l.name}`}>
+          <span>{l.emoji}</span><span>{l.name}</span>
+          <span style={{ fontSize:11, color:C.muted }}>{l.items.length}</span>
+        </button>
+      ))}
+      <button onClick={onNew} style={{ ...chip, background:'transparent', borderStyle:'dashed', color:C.accent }}>
+        + Liste{lists.length ? '' : ' d\u2019habituels'}
+      </button>
+    </div>
+  );
+}
+
+/** Fenêtre : on coche ce qu'il faut cette fois, puis « Ajouter ». */
+function FavListPicker({ list, onClose, onEdit, onAdd }) {
+  const { shopping } = useApp();
+  const present = useMemo(() => new Set(shopping.filter(s => !s.checked).map(s => stemFrName(s.name))), [shopping]);
+  const isIn = (it) => present.has(stemFrName(it.name));
+  const [sel, setSel] = useState(() => new Set());
+  const avail = list.items.filter(it => !isIn(it));
+  const toggle = (id) => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allOn = avail.length > 0 && avail.every(it => sel.has(it.id));
+  const n = [...sel].filter(id => avail.some(it => it.id === id)).length;
+  return (
+    <BottomSheet title={`${list.emoji} ${list.name}`} onClose={onClose}>
+      <div style={{ padding:'12px 18px 18px' }}>
+        <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:8 }}>
+          <button onClick={onEdit} style={{ background:'none', border:'none', color:C.accent, fontSize:13, cursor:'pointer', fontFamily:'inherit', padding:'4px 0' }}>✏️ Modifier</button>
+        </div>
+        {list.items.length === 0 && <div style={{ fontSize:13, color:C.muted, padding:'10px 0 16px' }}>Cette liste est vide. Appuie sur Modifier pour ajouter des articles.</div>}
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:10 }}>
+          {list.items.map(it => {
+            const inList = isIn(it), on = sel.has(it.id) && !inList;
+            return (
+              <button key={it.id} onClick={() => !inList && toggle(it.id)} aria-pressed={on} style={{
+                minHeight:36, padding:'0 14px', borderRadius:20, fontSize:14, fontFamily:'inherit',
+                cursor: inList ? 'default' : 'pointer',
+                background: on ? C.accentBg : C.border, color: on ? C.accent : C.text,
+                border: on ? `1px solid ${C.accent}` : inList ? `1px dashed ${C.muted}` : '1px solid transparent',
+                opacity: inList ? 0.55 : 1,
+              }}>{on && '✓ '}{it.name}{inList && <span style={{ fontSize:11, color:C.muted }}> · déjà dans la liste</span>}</button>
+            );
+          })}
+        </div>
+        {list.items.length > 0 && <div style={{ fontSize:12, color:C.muted, marginBottom:14 }}>Chaque article est rangé dans son rayon automatiquement.</div>}
+        <div style={{ display:'flex', gap:8 }}>
+          <Btn onClick={() => setSel(allOn ? new Set() : new Set(avail.map(it => it.id)))} disabled={!avail.length} style={{ flex:1, justifyContent:'center' }}>
+            {allOn ? 'Tout décocher' : 'Tout cocher'}
+          </Btn>
+          <Btn variant="primary" disabled={!n} onClick={() => onAdd(avail.filter(it => sel.has(it.id)))} style={{ flex:2, justifyContent:'center' }}>
+            {n ? `Ajouter ${n} article${n>1?'s':''}` : 'Ajouter'}
+          </Btn>
+        </div>
+      </div>
+    </BottomSheet>
+  );
+}
+
+/** Création / modification d'une liste d'habituels. */
+function FavListEditor({ list, onClose, onSave, onDelete }) {
+  const [emoji, setEmoji] = useState(list ? list.emoji : '🧺');
+  const [name,  setName]  = useState(list ? list.name : '');
+  const [items, setItems] = useState(list ? list.items : []);
+  const [draft, setDraft] = useState('');
+
+  const addNames = (raw) => {
+    const names = raw.split(',').map(x => x.trim()).filter(Boolean);
+    if (!names.length) return;
+    setItems(prev => {
+      const seen = new Set(prev.map(i => normTag(i.name)));
+      const add = [];
+      names.forEach(n => { const k = normTag(n); if (!seen.has(k)) { seen.add(k); add.push({ id: genId(), name: capFirst(n) }); } });
+      return [...prev, ...add];
+    });
+  };
+  const onDraft = (v) => {
+    if (v.includes(',')) { const i = v.lastIndexOf(','); addNames(v.slice(0, i)); setDraft(v.slice(i + 1).trimStart()); }
+    else setDraft(v);
+  };
+  const canSave = name.trim().length > 0;
+  const save = () => {
+    if (!canSave) return;
+    const extra = draft.split(',').map(x => x.trim()).filter(Boolean);
+    let finalItems = items;
+    if (extra.length) {
+      const seen = new Set(items.map(i => normTag(i.name)));
+      finalItems = [...items];
+      extra.forEach(n => { const k = normTag(n); if (!seen.has(k)) { seen.add(k); finalItems.push({ id: genId(), name: capFirst(n) }); } });
+    }
+    onSave({ id: list ? list.id : genId(), name: name.trim(), emoji: emoji.trim() || '🧺', items: finalItems });
+  };
+
+  return (
+    <BottomSheet title={list ? 'Modifier la liste' : 'Nouvelle liste'} onClose={onClose}>
+      <div style={{ padding:'14px 18px 18px' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'flex-start', marginBottom:14 }}>
+          <EmojiInput value={emoji} onChange={setEmoji} />
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:4 }}>Nom de la liste</div>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="Fromage, Fruits…" style={fieldStyle()} aria-label="Nom de la liste" />
+          </div>
+        </div>
+        <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>Articles</div>
+        {items.length > 0 && (
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:8 }}>
+            {items.map(it => (
+              <span key={it.id} style={{ display:'inline-flex', alignItems:'center', gap:6, minHeight:32, padding:'0 6px 0 12px', borderRadius:20, fontSize:13, background:C.border, color:C.text }}>
+                {it.name}
+                <button onClick={() => setItems(p => p.filter(x => x.id !== it.id))} aria-label={`Retirer ${it.name}`} style={{
+                  background:'none', border:'none', color:C.muted, fontSize:17, lineHeight:1, cursor:'pointer', padding:'0 6px', fontFamily:'inherit',
+                }}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        <input value={draft} onChange={e => onDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { addNames(draft); setDraft(''); } }}
+          placeholder="Ajouter : emmental, chèvre…" style={fieldStyle()} aria-label="Ajouter des articles" />
+        <div style={{ fontSize:11, color:C.muted, marginTop:5 }}>Sépare les articles par des virgules.</div>
+        <div style={{ display:'flex', gap:8, marginTop:18 }}>
+          {list && <Btn variant="danger" onClick={() => onDelete(list.id)} style={{ flex:1, justifyContent:'center' }}>Supprimer</Btn>}
+          <Btn variant="primary" disabled={!canSave} onClick={save} style={{ flex:2, justifyContent:'center' }}>Enregistrer</Btn>
+        </div>
+      </div>
+    </BottomSheet>
   );
 }
 
@@ -5141,7 +5403,7 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
       <div style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 12px', background:C.catHdr, borderLeft:`3px solid ${C.accent}`, userSelect:'none' }}>
         <span style={{ color:C.muted, fontSize:14, cursor:'grab', paddingRight:2 }}>≡</span>
         {/* Tout supprimer la catégorie */}
-        <button
+        <button aria-label="Valider"
           onPointerDown={e => { e.stopPropagation(); onDeleteAll?.(); }}
           title="Tout supprimer"
           style={{
@@ -5154,20 +5416,20 @@ function CategorySection({ cat, items, isDragOver, dragLine, onCatDragStart, onC
           <span style={{ fontSize:17 }}>{cat.emoji}</span>
           <span style={{ fontWeight:700, fontSize:14, color:C.accent }}>{cat.name}</span>
           <span style={{
-            fontSize:10, fontWeight:700, color:C.onAccent,
+            fontSize:11, fontWeight:700, color:C.onAccent,
             background:C.accent, padding:'1px 7px', borderRadius:20, marginLeft:'auto',
           }}>{items.length}</span>
           <span style={{ color:C.muted, fontSize:10 }}>{open?'▲':'▼'}</span>
         </span>
         {/* Boutons de réordonnancement */}
         <div style={{ display:'flex', flexDirection:'column', gap:1, flexShrink:0, marginLeft:4 }}>
-          <button onPointerDown={e => { e.stopPropagation(); onMoveUp?.(); }} style={{
+          <button aria-label="Monter" onPointerDown={e => { e.stopPropagation(); onMoveUp?.(); }} style={{
             background: onMoveUp ? C.border : 'transparent', border:'none',
             color: onMoveUp ? C.soft : C.border, borderRadius:4,
             width:22, height:18, fontSize:10, cursor: onMoveUp ? 'pointer' : 'default',
             lineHeight:1, padding:0, fontFamily:'inherit',
           }}>▲</button>
-          <button onPointerDown={e => { e.stopPropagation(); onMoveDown?.(); }} style={{
+          <button aria-label="Descendre" onPointerDown={e => { e.stopPropagation(); onMoveDown?.(); }} style={{
             background: onMoveDown ? C.border : 'transparent', border:'none',
             color: onMoveDown ? C.soft : C.border, borderRadius:4,
             width:22, height:18, fontSize:10, cursor: onMoveDown ? 'pointer' : 'default',
@@ -5276,7 +5538,7 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
         width:20, height:20, borderRadius:'50%', flexShrink:0,
         background: item.checked ? C.green : 'transparent',
         border:`2px solid ${item.checked ? C.green : C.ring}`,
-        color:C.onAccent, cursor:'pointer', fontSize:10,
+        color:C.onAccent, cursor:'pointer', fontSize:11,
         display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.2s',
       }}>
         {item.checked ? '✓' : ''}
@@ -5286,7 +5548,7 @@ function ItemRow({ item, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd 
         textDecoration: item.checked ? 'line-through' : 'none',
         cursor: item.checked ? 'default' : 'pointer',
       }}>{item.name}</span>
-      {item.fromRecipeId && <span style={{ fontSize:10, color:C.accent, flexShrink:0 }}>📅</span>}
+      {item.fromRecipeId && <span style={{ fontSize:11, color:C.accent, flexShrink:0 }}>📅</span>}
       {item.qty > 0 && (
         <span onClick={() => !item.checked && setEditing(true)} style={{
           color:C.hi, fontSize:13, flexShrink:0, cursor: item.checked?'default':'pointer',
@@ -5426,7 +5688,7 @@ function StatsTab() {
               {(favRecipe.tags||[]).length > 0 && (
                 <div style={{ display:'flex', flexWrap:'wrap', gap:4, marginTop:7 }}>
                   {favRecipe.tags.map(t => (
-                    <span key={t} style={{ background:C.accentBg, color:C.accent, fontSize:10, padding:'2px 8px', borderRadius:20 }}>{t}</span>
+                    <span key={t} style={{ background:C.accentBg, color:C.accent, fontSize:11, padding:'2px 8px', borderRadius:20 }}>{t}</span>
                   ))}
                 </div>
               )}
@@ -5447,7 +5709,7 @@ function StatsTab() {
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
                   <span style={{ fontSize:12, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1, marginRight:6 }}>{r.name}</span>
-                  <span style={{ fontSize:10, color:C.muted, flexShrink:0 }}>{n}× · {persons}p</span>
+                  <span style={{ fontSize:11, color:C.muted, flexShrink:0 }}>{n}× · {persons}p</span>
                 </div>
                 <div style={{ height:5, background:C.border, borderRadius:3, overflow:'hidden' }}>
                   <div style={{ height:'100%', borderRadius:3, transition:'width 0.6s',
@@ -5505,7 +5767,7 @@ function StatsTab() {
               >{r.name}</span>
               {r.favorite && <span style={{ fontSize:12 }}>⭐</span>}
               {(r.tags||[]).length > 0 && (
-                <span style={{ fontSize:10, color:C.muted, flexShrink:0 }}>{r.tags[0]}</span>
+                <span style={{ fontSize:11, color:C.muted, flexShrink:0 }}>{r.tags[0]}</span>
               )}
               <button onClick={() => setAssignFromStats(r)} style={{
                 background:C.accentBg, border:`1px solid ${C.accent}44`,
@@ -5543,7 +5805,7 @@ function KpiCard({ icon, value, label, sub, color }) {
       <div style={{ fontSize:26, marginBottom:6 }}>{icon}</div>
       <div style={{ fontSize:24, fontWeight:800, color:color||C.text, lineHeight:1 }}>{value}</div>
       <div style={{ fontSize:11, color:C.muted, marginTop:3, lineHeight:1.3 }}>{label}</div>
-      {sub && <div style={{ fontSize:10, color:C.muted, marginTop:2, opacity:0.75 }}>{sub}</div>}
+      {sub && <div style={{ fontSize:11, color:C.muted, marginTop:2, opacity:0.75 }}>{sub}</div>}
     </div>
   );
 }
@@ -5572,6 +5834,7 @@ const SETTINGS_SECTION_TITLES = {
   planning:   '📅 Vue du planning',
   foyer:      '👥 Taille du foyer',
   categories: '🛒 Catégories de courses',
+  tags:       '🏷 Tags des recettes',
   cantine:    '🏫 Menus cantine',
   apparence:  '🎨 Apparence',
   sauvegarde: '💾 Sauvegarde & Restauration',
@@ -5579,14 +5842,16 @@ const SETTINGS_SECTION_TITLES = {
 };
 
 function SettingsTab() {
-  const { settings, cats, cantine } = useApp();
+  const { settings, cats, cantine, recipes } = useApp();
   const [activeSection, setActiveSection] = useState(null);
+  const nTags = useMemo(() => new Set(recipes.flatMap(r => r.tags || [])).size, [recipes]);
 
   const weeksLabel = (settings.weeksToShow || 0) === 0 ? 'vue annuelle' : `${settings.weeksToShow} semaines`;
   const rows = [
     { id:'planning',   emoji:'📅', title:'Vue du planning',          desc:`Actuellement : ${weeksLabel}` },
     { id:'foyer',      emoji:'👥', title:'Taille du foyer',           desc:`${settings.householdSize || 6} personnes par défaut` },
     { id:'categories', emoji:'🛒', title:'Catégories de courses',    desc:`${cats.length} catégorie${cats.length!==1?'s':''} · ordre, mots-clés` },
+    { id:'tags',       emoji:'🏷', title:'Tags des recettes',         desc: nTags ? `${nTags} tag${nTags!==1?'s':''} · renommer, fusionner, supprimer` : 'Aucun tag pour le moment' },
     { id:'cantine',    emoji:'🏫', title:'Menus cantine',             desc: cantine.length ? `${cantine.length} jour${cantine.length!==1?'s':''} enregistré${cantine.length!==1?'s':''}` : 'Aucun menu enregistré' },
     { id:'apparence',  emoji:'🎨', title:'Apparence',                 desc:`Thème : ${(THEMES[settings.theme] || THEMES.classic).label}` },
     { id:'sauvegarde', emoji:'💾', title:'Sauvegarde & Restauration', desc:'Export et import JSON complet' },
@@ -5599,6 +5864,7 @@ function SettingsTab() {
         {activeSection === 'planning'   && <SettingsPlanningSection />}
         {activeSection === 'foyer'      && <SettingsFoyerSection />}
         {activeSection === 'categories' && <SettingsCategoriesSection />}
+        {activeSection === 'tags'       && <SettingsTagsSection />}
         {activeSection === 'cantine'    && <SettingsCantineSection />}
         {activeSection === 'apparence'  && <SettingsAppearanceSection />}
         {activeSection === 'sauvegarde' && <SettingsBackupSection />}
@@ -5624,6 +5890,101 @@ function SettingsTab() {
         </button>
       ))}
     </div>
+  );
+}
+
+function SettingsTagsSection() {
+  const { recipes, renameTag, deleteTag } = useApp();
+  const [editTag, setEditTag] = useState(null);
+  const tags = useMemo(() => {
+    const m = {};
+    recipes.forEach(r => (r.tags || []).forEach(t => { m[t] = (m[t] || 0) + 1; }));
+    return Object.entries(m).map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'fr'));
+  }, [recipes]);
+  const dupGroups = useMemo(() => {
+    const g = {};
+    tags.forEach(t => { const k = normTag(t.name); (g[k] = g[k] || []).push(t); });
+    return Object.values(g).filter(a => a.length > 1);
+  }, [tags]);
+
+  if (!tags.length) return <EmptyState icon="🏷" text="Aucun tag. Ajoutes-en dans l'éditeur d'une recette." />;
+
+  return (
+    <>
+      {dupGroups.map(g => (
+        <div key={g[0].name} style={{
+          display:'flex', alignItems:'center', gap:10, padding:'8px 10px', marginBottom:8,
+          background:C.orangeBg, border:`1px solid ${C.orange}44`, borderRadius:C.rRow,
+        }}>
+          <div style={{ flex:1, fontSize:12, lineHeight:1.5, color:C.soft }}>
+            Ces tags se ressemblent : {g.map(t => `« ${t.name} »`).join(' et ')}
+          </div>
+          <Btn small variant="orange" onClick={() => renameTag(g.slice(1).map(t => t.name), g[0].name)}>Fusionner</Btn>
+        </div>
+      ))}
+      <div style={{ fontSize:11, color:C.muted, letterSpacing:'0.05em', fontWeight:600, padding:'2px 4px 6px' }}>
+        {tags.length} TAG{tags.length>1?'S':''} · TAP POUR MODIFIER
+      </div>
+      {tags.map(t => (
+        <button key={t.name} onClick={() => setEditTag(t)} style={{
+          display:'flex', alignItems:'center', gap:10, width:'100%', minHeight:40, padding:'6px 12px',
+          marginBottom:5, background:C.card, border:`1px solid ${C.border}`, borderRadius:C.rRow,
+          cursor:'pointer', fontFamily:'inherit', textAlign:'left',
+        }}>
+          <span style={{ fontSize:13, color:C.text, background:C.border, borderRadius:20, padding:'2px 10px' }}>{t.name}</span>
+          <span style={{ flex:1, fontSize:12, color:C.muted }}>{t.count} recette{t.count>1?'s':''}</span>
+          <span style={{ color:C.muted, fontSize:18 }}>›</span>
+        </button>
+      ))}
+      {editTag && (
+        <TagEditSheet
+          tag={editTag}
+          others={tags.filter(t => t.name !== editTag.name)}
+          onClose={() => setEditTag(null)}
+          onRename={(to) => { renameTag([editTag.name], to); setEditTag(null); }}
+          onDelete={() => { deleteTag(editTag.name); setEditTag(null); }}
+        />
+      )}
+    </>
+  );
+}
+
+function TagEditSheet({ tag, others, onClose, onRename, onDelete }) {
+  const [name, setName] = useState(tag.name);
+  const clean  = name.trim();
+  const target = others.find(o => normTag(o.name) === normTag(clean) && o.name !== tag.name);
+  const unchanged = !clean || clean === tag.name;
+  return (
+    <BottomSheet title={`Modifier « ${tag.name} »`} onClose={onClose}>
+      <div style={{ padding:'14px 18px 18px' }}>
+        <div style={{ fontSize:12, color:C.muted, marginBottom:4 }}>Nom</div>
+        <input value={name} onChange={e => setName(e.target.value)} style={fieldStyle()} aria-label="Nom du tag" />
+        {others.length > 0 && (<>
+          <div style={{ fontSize:12, color:C.muted, margin:'14px 0 6px' }}>
+            Ou fusionner dans un tag existant ({tag.count} recette{tag.count>1?'s':''} concernée{tag.count>1?'s':''})
+          </div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            {others.map(o => {
+              const on = o.name === (target && target.name);
+              return (
+                <button key={o.name} onClick={() => setName(o.name)} style={{
+                  fontSize:13, padding:'5px 12px', borderRadius:20, cursor:'pointer', fontFamily:'inherit',
+                  background: on ? C.accentDk : C.border, color: on ? C.onAccent : C.text,
+                  border:'1px solid transparent',
+                }}>{o.name}</button>
+              );
+            })}
+          </div>
+        </>)}
+        <div style={{ display:'flex', gap:8, marginTop:18 }}>
+          <Btn variant="danger" onClick={onDelete} style={{ flex:1, justifyContent:'center' }}>Supprimer</Btn>
+          <Btn variant="primary" disabled={unchanged} onClick={() => onRename(target ? target.name : clean)} style={{ flex:2, justifyContent:'center' }}>
+            {target ? `Fusionner dans « ${target.name} »` : 'Renommer'}
+          </Btn>
+        </div>
+      </div>
+    </BottomSheet>
   );
 }
 
@@ -5660,14 +6021,14 @@ function SettingsFoyerSection() {
         Nombre de personnes par défaut pour les repas planifiés
       </span>
       <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <button onClick={() => updSettings({ householdSize: Math.max(1, (settings.householdSize||6) - 1) })} style={{
+        <button aria-label="Moins de personnes" onClick={() => updSettings({ householdSize: Math.max(1, (settings.householdSize||6) - 1) })} style={{
           background:C.border, border:'none', color:C.text,
           width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
         }}>−</button>
         <span style={{ fontWeight:700, fontSize:18, color:C.accent, minWidth:28, textAlign:'center' }}>
           {settings.householdSize || 6}
         </span>
-        <button onClick={() => updSettings({ householdSize: Math.min(20, (settings.householdSize||6) + 1) })} style={{
+        <button aria-label="Plus de personnes" onClick={() => updSettings({ householdSize: Math.min(20, (settings.householdSize||6) + 1) })} style={{
           background:C.border, border:'none', color:C.text,
           width:30, height:30, borderRadius:8, cursor:'pointer', fontSize:18, lineHeight:1,
         }}>+</button>
@@ -5865,7 +6226,7 @@ function SettingsCategoriesSection() {
               <div style={{ fontWeight:600, color:C.text, fontSize:14, display:'flex', alignItems:'center', gap:6 }}>
                 <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{cat.name}</span>
                 {isDefault && (
-                  <span style={{ fontSize:10, color:C.muted, border:`1px solid ${C.border}`, borderRadius:10, padding:'1px 7px', flexShrink:0 }}>par défaut</span>
+                  <span style={{ fontSize:11, color:C.muted, border:`1px solid ${C.border}`, borderRadius:10, padding:'1px 7px', flexShrink:0 }}>par défaut</span>
                 )}
               </div>
               <div style={{ fontSize:12, color:C.muted, marginTop:1 }}>
@@ -5933,7 +6294,7 @@ function SettingsCantineSection() {
                     {c.plat || c.entree || '—'}
                   </div>
                 </div>
-                <button onClick={() => deleteCantineDay(c.date)} style={{
+                <button aria-label="Supprimer le menu" onClick={() => deleteCantineDay(c.date)} style={{
                   background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:16, opacity:0.7, flexShrink:0,
                 }}>×</button>
               </div>
@@ -6076,6 +6437,7 @@ function SettingsBackupSection() {
 }
 
 const CHANGELOG = [
+  ['3.8.0', 'Tags : écran de gestion (renommer, fusionner, supprimer, doublons) · listes d\'habituels dans Courses · boutons à 2 tailles, champs et textes harmonisés, libellés d\'accessibilité'],
   ['3.7.1', 'Sécurité : écran de secours en cas de plantage · import vérifié, confirmé et annulable · export par la fenêtre « Enregistrer sous » · Annuler sur duplication de semaine et menu cantine · nettoyage du diagnostic OCR'],
   ['3.7.0', 'Catégories : liste glisser-déposer avec compteurs, test d\'un article, éditeur à pastilles, suppression annulable'],
   ['3.6.0', 'Thèmes : Classique (inchangé) et Minuit (nouveau) au choix dans Options > Apparence'],
@@ -6194,10 +6556,7 @@ function CategoryForm({ cat, onClose }) {
   const [showAllKw,  setShowAllKw]  = useState(false);
   const [emojiOpen,  setEmojiOpen]  = useState(false);
 
-  const inp = {
-    padding:'10px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:C.rBtn + 3,
-    color:C.text, fontSize:14, outline:'none', width:'100%', fontFamily:'inherit',
-  };
+  const inp = fieldStyle({ style:{ borderRadius:C.rBtn + 3, fontFamily:'inherit' } });
 
   // Ajoute un ou plusieurs mots-clés ; retourne la liste à jour
   const addKw = (raw) => {
